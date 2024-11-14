@@ -8,6 +8,8 @@ We propose JoyVASA, a diffusion-based method for generating facial dynamics and 
 
 ![Inference Pipeline](assets/imgs/pipeline_inference.png)
 
+**Inference Pipeline of the proposed JoyVASA.** Given a reference image, we first extract the corresponding 3D facial appearance feature using the appearance encoder, and the learned motion information using the motion encoder. For the input speech, the audio features are initially extracted using the wav2vec2 encoder. The audio-driven motion sequences are then sampled using the diffusion model trained in the second stage in a sliding window fashion. Using the canonical source keypoints and the sampled target motion sequences, the target keypoints are computed. Finally, the 3D facial appearance feature is warped based on the source and target keypoints and rendered by a generator to produce the final output video.
+
 ## ⚙️ Installation
 
 System requirements:
