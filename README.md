@@ -1,5 +1,14 @@
 # JoyVASA: Portrait and Animal Image Animation with Diffusion-Based Audio-Driven Facial Dynamics and Head Motion Generation
 
+<br>
+<div align='left'>
+    <a href='https://jdh-algo.github.io/JoyVASA'><img src='https://img.shields.io/badge/Project-HomePage-Green'></a>
+    <a href='https://arxiv.org/abs/2411.09209'><img src='https://img.shields.io/badge/Paper-Arxiv-red'></a>
+    <a href='https://huggingface.co/jdh-algo/JoyVASA'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Model-yellow'></a>
+    <!-- <a href='https://huggingface.co/spaces/jdh-algo/JoyHallo'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Demo-yellow'></a> -->
+</div>
+<br>
+
 ## 📖 Introduction
 
 We propose JoyVASA, a diffusion-based method for generating facial dynamics and head motion in audio-driven facial animation. Specifically, in the first stage, we introduce a decoupled facial representation framework that separates dynamic facial expressions from static 3D facial representations. This decoupling allows the system to generate longer videos by combining any static 3D facial representation with dynamic motion sequences. Then, in the second stage, a diffusion transformer is trained to generate motion sequences directly from audio cues, independent of character identity. Finally, a generator trained in the first stage uses the 3D facial representation and the generated motion sequences as inputs to render high-quality animations. With the decoupled facial representation and the identity-independent motion generation process, JoyVASA extends beyond human portraits to animate animal faces seamlessly. The model is trained on a hybrid dataset of private Chinese and public English data, enabling multilingual support. Experimental results validate the effectiveness of our approach. Future work will focus on improving real-time performance and refining expression control, further expanding the framework’s applications in portrait animation.
