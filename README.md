@@ -22,11 +22,13 @@ Audio-driven portrait animation has made significant advances with diffusion-bas
 
 System requirements:
 
+Ubuntu:
 - Tested on Ubuntu 20.04, Cuda 11.3
 - Tested GPUs: A100
 
+Windows:
 - Tested on Windows 11, CUDA 12.1
-- Tested GPU: RTX 4060 Laptop 8GB VRAM GPU
+- Tested GPUs: RTX 4060 Laptop 8GB VRAM GPU
 
 Create environment:
 
