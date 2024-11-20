@@ -3,12 +3,17 @@ import tyro
 import subprocess
 import gradio as gr
 import os.path as osp
+import platform
 from src.utils.helper import load_description
 from src.gradio_pipeline import GradioPipeline, GradioPipelineAnimal
 from src.config.crop_config import CropConfig
 from src.config.argument_config import ArgumentConfig
 from src.config.inference_config import InferenceConfig
 
+if platform.system() == "Windows":
+    import pathlib
+    temp = pathlib.PosixPath
+    pathlib.PosixPath = pathlib.WindowsPath
 
 def partial_fields(target_class, kwargs):
     return target_class(**{k: v for k, v in kwargs.items() if hasattr(target_class, k)})
