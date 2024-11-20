@@ -25,6 +25,9 @@ System requirements:
 - Tested on Ubuntu 20.04, Cuda 11.3
 - Tested GPUs: A100
 
+- Tested on Windows 11, CUDA 12.1
+- Tested GPU: RTX 4060 Laptop 8GB VRAM GPU
+
 Create environment:
 
 ```bash
