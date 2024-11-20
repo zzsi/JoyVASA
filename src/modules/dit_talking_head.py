@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import platform
 
 from .common import PositionalEncoding, enc_dec_mask, pad_audio
 from ..config.base_config import make_abs_path
@@ -111,9 +112,12 @@ class DitTalkingHead(nn.Module):
                         param.requires_grad = False
         elif self.audio_model == 'hubert_zh': # 根据经验，hubert特征提取器效果更好
             print("using hubert chinese")
+            model_path = '../../pretrained_weights/TencentGameMate:chinese-hubert-base'
+            if platform.system() == "Windows":
+                model_path = '../../pretrained_weights/chinese-hubert-base'
             from .hubert import HubertModel
             # from hubert import HubertModel
-            self.audio_encoder = HubertModel.from_pretrained(make_abs_path('../../pretrained_weights/TencentGameMate:chinese-hubert-base'))
+            self.audio_encoder = HubertModel.from_pretrained(make_abs_path(model_path))
             self.audio_encoder.feature_extractor._freeze_parameters()
 
             frozen_layers = [0, 1]
@@ -126,8 +130,11 @@ class DitTalkingHead(nn.Module):
                         param.requires_grad = False 
         elif self.audio_model == 'hubert_zh_ori': # 根据经验，hubert特征提取器效果更好
             print("using hubert chinese ori")
+            model_path = '../../pretrained_weights/TencentGameMate:chinese-hubert-base'
+            if platform.system() == "Windows":
+                model_path = '../../pretrained_weights/chinese-hubert-base'
             from .hubert import HubertModel
-            self.audio_encoder = HubertModel.from_pretrained(make_abs_path('../../pretrained_weights/TencentGameMate:chinese-hubert-base'))
+            self.audio_encoder = HubertModel.from_pretrained(make_abs_path(model_path))
             self.audio_encoder.feature_extractor._freeze_parameters()
         else:
             raise ValueError(f'Unknown audio model {self.audio_model}!')
