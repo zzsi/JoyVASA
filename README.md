@@ -204,13 +204,13 @@ If you find our work helpful, please consider citing us:
 
 ```
 @misc{cao2024joyvasaportraitanimalimage,
-  title={JoyVASA: Portrait and Animal Image Animation with Diffusion-Based Audio-Driven Facial Dynamics and Head Motion Generation}, 
-  author={Xuyang Cao and Sheng Shi and Jun Zhao and Yang Yao and Jintao Fei and Minyu Gao and Guoxin Wang},
-  year={2024},
-  eprint={2411.09209},
-  archivePrefix={arXiv},
-  primaryClass={cs.CV},
-  url={https://arxiv.org/abs/2411.09209}, 
+      title={JoyVASA: Portrait and Animal Image Animation with Diffusion-Based Audio-Driven Facial Dynamics and Head Motion Generation}, 
+      author={Xuyang Cao and Guoxin Wang and Sheng Shi and Jun Zhao and Yang Yao and Jintao Fei and Minyu Gao},
+      year={2024},
+      eprint={2411.09209},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2411.09209}, 
 }
 ```
 
