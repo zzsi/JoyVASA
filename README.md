@@ -1,14 +1,14 @@
 <h1 align='center'>JoyVASA: Portrait and Animal Image Animation with Diffusion-Based Audio-Driven Facial Dynamics and Head Motion Generation</h1>
 
 <div align='center'>
-    <a href='https://github.com/xuyangcao' target='_blank'>Xuyang Cao</a><sup>1*</sup>
-    Guoxin Wang<sup>12*</sup>
-    <a href='https://github.com/DBDXSS' target='_blank'>Sheng Shi</a><sup>1*</sup>
-    <a href='https://github.com/zhaojun060708' target='_blank'>Jun Zhao</a><sup>1</sup>
+    <a href='https://github.com/xuyangcao' target='_blank'>Xuyang Cao</a><sup>1*</sup>&emsp;
+    Guoxin Wang<sup>12*</sup>&emsp;
+    <a href='https://github.com/DBDXSS' target='_blank'>Sheng Shi</a><sup>1*</sup>&emsp;
+    <a href='https://github.com/zhaojun060708' target='_blank'>Jun Zhao</a><sup>1</sup>&emsp;
     Yang Yao<sup>1</sup>
 </div>
 <div align='center'>
-    Jintao Fei<sup>1</sup>
+    Jintao Fei<sup>1</sup>&emsp;
     Minyu Gao<sup>1</sup>
 </div>
 <div align='center'>
