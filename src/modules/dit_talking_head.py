@@ -79,56 +79,12 @@ class DitTalkingHead(nn.Module):
             print("using wav2vec2 audio encoder ...")
             from .wav2vec2 import Wav2Vec2Model
             self.audio_encoder = Wav2Vec2Model.from_pretrained(make_abs_path('../../pretrained_weights/wav2vec2-base-960h'))
-            # wav2vec 2.0 weights initialization
-            self.audio_encoder.feature_extractor._freeze_parameters()
-
-            frozen_layers = [0, 1]
-            for name, param in self.audio_encoder.named_parameters():
-                if name.startswith("feature_projection"):
-                    param.requires_grad = False
-                if name.startswith("encoder.layers"):
-                    layer = int(name.split(".")[2])
-                    if layer in frozen_layers:
-                        param.requires_grad = False
-        elif self.audio_model == "wav2vec2_ori":
-            from .wav2vec2 import Wav2Vec2Model
-            self.audio_encoder = Wav2Vec2Model.from_pretrained(make_abs_path('../../pretrained_weights/wav2vec2-base-960h'))
-            # wav2vec 2.0 weights initialization
             self.audio_encoder.feature_extractor._freeze_parameters()
         elif self.audio_model == 'hubert': # 根据经验，hubert特征提取器效果更好
             from .hubert import HubertModel
-            # from hubert import HubertModel
             self.audio_encoder = HubertModel.from_pretrained(make_abs_path('../../pretrained_weights/hubert-base-ls960'))
             self.audio_encoder.feature_extractor._freeze_parameters()
-            # print("hubert-en: ", self.audio_encoder)
-
-            frozen_layers = [0, 1]
-            for name, param in self.audio_encoder.named_parameters():
-                if name.startswith("feature_projection"):
-                    param.requires_grad = False
-                if name.startswith("encoder.layers"):
-                    layer = int(name.split(".")[2])
-                    if layer in frozen_layers:
-                        param.requires_grad = False
-        elif self.audio_model == 'hubert_zh': # 根据经验，hubert特征提取器效果更好
-            print("using hubert chinese")
-            model_path = '../../pretrained_weights/TencentGameMate:chinese-hubert-base'
-            if platform.system() == "Windows":
-                model_path = '../../pretrained_weights/chinese-hubert-base'
-            from .hubert import HubertModel
-            # from hubert import HubertModel
-            self.audio_encoder = HubertModel.from_pretrained(make_abs_path(model_path))
-            self.audio_encoder.feature_extractor._freeze_parameters()
-
-            frozen_layers = [0, 1]
-            for name, param in self.audio_encoder.named_parameters():
-                if name.startswith("feature_projection"):
-                    param.requires_grad = False
-                if name.startswith("encoder.layers"):
-                    layer = int(name.split(".")[2])
-                    if layer in frozen_layers:
-                        param.requires_grad = False 
-        elif self.audio_model == 'hubert_zh_ori': # 根据经验，hubert特征提取器效果更好
+        elif self.audio_model == 'hubert_zh_ori' or self.audio_model == 'hubert_zh': # 根据经验，hubert特征提取器效果更好
             print("using hubert chinese ori")
             model_path = '../../pretrained_weights/TencentGameMate:chinese-hubert-base'
             if platform.system() == "Windows":

@@ -22,6 +22,7 @@ pillow==10.3.0
 pyyaml==6.0.1
 setuptools==70.0.0
 torch==2.2.2+cu121
+torchaudio==2.2.2
 torchvision==0.17.2+cu121
 tqdm==4.66.4
 transformers==4.39.2
@@ -42,3 +43,4 @@ imageio-ffmpeg==0.5.1
 tyro==0.8.5
 gradio==5.1.0
 pykalman==0.9.7
+tensorboardX==2.6.2.2

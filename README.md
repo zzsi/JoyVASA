@@ -41,7 +41,7 @@ Audio-driven portrait animation has made significant advances with diffusion-bas
 
 Ubuntu:
 
-- Tested on Ubuntu 20.04, Cuda 11.3
+- Tested on Ubuntu 20.04, CUDA 12.1
 - Tested GPUs: A100
 
 Windows:
@@ -197,6 +197,35 @@ python app.py
 ```
 
 The demo will be create at http://127.0.0.1:7862.
+
+
+## ⚓️ Train Motion Generator with Your Own Data
+
+The motion generater should be trained using human talking face videos.
+
+
+### 1. Prepare train and validation data
+
+Chnage the `root_dir` in `01_extract_motions.py` with you own dataset path, then run the following commands to generate training and validation data:
+
+```bash
+cd src/prepare_data
+python 01_extract_motions.py
+python 02_gen_labels.py
+pyhton 03_merge_motions.py
+python 04_gen_template.py
+
+mv motion_templete.pkl motions.pkl train.json test.json ../../data
+cd ../..
+```
+
+### 2. Train
+
+```bash
+python train.py
+```
+
+The experimental results is located in `experiments/`.
 
 ## 📝 Citations
 
