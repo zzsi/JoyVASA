@@ -365,6 +365,8 @@ class LivePortraitWrapper(object):
             audio = torch.from_numpy(audio).to(self.device)
         assert audio.ndim == 1, 'Audio must be 1D tensor.'
         log(f"loading audio from: {args.audio}")
+        audio = F.pad(audio, (1280, 640), "constant", 0)
+
 
         # crop audio into n_subdivision according to n_motions 
         clip_len = int(len(audio) / 16000 * self.fps)
