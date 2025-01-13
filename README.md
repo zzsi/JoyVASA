@@ -63,7 +63,7 @@ pip install -r requirements.txt
 sudo apt-get update  
 sudo apt-get install ffmpeg -y
 
-# 4. Install MultiScaleDeformableAttention
+# 4. Optional: Install MultiScaleDeformableAttention for animal image animation
 cd src/utils/dependencies/XPose/models/UniPose/ops
 python setup.py build install
 cd - # equal to cd ../../../../../../../
