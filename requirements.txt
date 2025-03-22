@@ -1,4 +1,4 @@
---find-links https://download.pytorch.org/whl/torch_stable.html
+# --find-links https://download.pytorch.org/whl/torch_stable.html
 
 accelerate==0.28.0
 audio-separator==0.17.2

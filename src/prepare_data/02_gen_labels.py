@@ -44,12 +44,14 @@ def filter_by_duration(video_path, min_duration=8.01):
 
 
 total_labels = []
-root_dir = "/mnt/afs2/xuyangcao/code/D-EMO/digital_human_data/green_screen/wild_green_screen_25fps_splited_croped"
+# root_dir = "/mnt/afs2/xuyangcao/code/D-EMO/digital_human_data/green_screen/wild_green_screen_25fps_splited_croped"
+root_dir = "/workspace/data/"
 filenames = [os.path.join(root_dir, filename) for filename in os.listdir(root_dir) if filename.endswith("mp4") ]
+print(f"len(filenames): {len(filenames)}")
 cur_labels = generate_labels(filenames)
 total_labels += cur_labels
 
-print(f"{len(total_labels)}")
+print(f"len(total_labels): {len(total_labels)}")
 
 total_labels = sorted(total_labels, key=lambda x: x["video_name"])
 num_train_labels = int(0.8 * len(total_labels))

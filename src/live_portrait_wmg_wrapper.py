@@ -79,7 +79,7 @@ class LivePortraitWrapper(object):
 
         # Motion Genertor
         self.motion_generator, self.motion_generator_args = load_model(inference_cfg.checkpoint_MotionGenerator, model_config, self.device, 'motion_generator')
-        log(f'Load motion_generator from {osp.realpath(inference_cfg.checkpoint_MotionGenerator)} done.')
+        log(f'** Load motion_generator from {osp.realpath(inference_cfg.checkpoint_MotionGenerator)} done.')
         self.n_motions = self.motion_generator_args.n_motions
         self.n_prev_motions = self.motion_generator_args.n_prev_motions
         self.fps = self.motion_generator_args.fps

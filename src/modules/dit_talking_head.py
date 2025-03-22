@@ -86,7 +86,8 @@ class DitTalkingHead(nn.Module):
             self.audio_encoder.feature_extractor._freeze_parameters()
         elif self.audio_model == 'hubert_zh_ori' or self.audio_model == 'hubert_zh': # 根据经验，hubert特征提取器效果更好
             print("using hubert chinese ori")
-            model_path = '../../pretrained_weights/TencentGameMate:chinese-hubert-base'
+            # model_path = '../../pretrained_weights/TencentGameMate:chinese-hubert-base'
+            model_path = '../../pretrained_weights/chinese-hubert-base'
             if platform.system() == "Windows":
                 model_path = '../../pretrained_weights/chinese-hubert-base'
             from .hubert import HubertModel
@@ -104,6 +105,7 @@ class DitTalkingHead(nn.Module):
         self.start_motion_feat = nn.Parameter(torch.randn(1, self.n_prev_motions, self.motion_feat_dim)) # 1, 10, 76
 
         # Diffusion model
+        print(f"create denoising network on {device}")
         self.denoising_net = DenoisingNetwork(device=device, n_motions=self.n_motions, n_prev_motions=self.n_prev_motions, 
                                               motion_feat_dim=self.motion_feat_dim, feature_dim=feature_dim)
         # diffusion schedule

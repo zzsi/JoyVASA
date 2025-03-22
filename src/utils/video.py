@@ -45,6 +45,7 @@ def images2video(images, wfp, **kwargs):
             writer.append_data(images[i])
 
     writer.close()
+    print(f"Silent video written to: {wfp}. Number of frames: {n}")
 
 
 def video2gif(video_fp, fps=30, size=256):
@@ -193,10 +194,10 @@ def add_audio_to_video(silent_video_path: str, audio_video_path: str, output_vid
         cmd = [
             'ffmpeg',
             '-y',
-            '-loglevel', 'quiet',
+            # '-loglevel', 'quiet',
             '-i', f'{silent_video_path}',
             '-i', f'{audio_video_path}',
-            '-c:v', 'libx264',
+            # '-c:v', 'libx264',
             '-b:v', '2M', 
             '-r', '25', 
             f'{output_video_path}'
@@ -214,12 +215,14 @@ def add_audio_to_video(silent_video_path: str, audio_video_path: str, output_vid
             f'"{output_video_path}"'
         ]
     try:
-        subprocess.run(cmd)
+        result = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+        print(f"Command output: {result}")
         log(f"Video with audio generated successfully: {output_video_path}")
         if remove_temp:
             os.remove(silent_video_path)
     except subprocess.CalledProcessError as e:
         log(f"Error occurred: {e}")
+        log(f"Error output: {e.output}")
 
 
 def bb_intersection_over_union(boxA, boxB):

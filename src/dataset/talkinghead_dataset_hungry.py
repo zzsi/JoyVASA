@@ -13,11 +13,14 @@ torchaudio.set_audio_backend('soundfile')
 warnings.filterwarnings('ignore', message='PySoundFile failed. Trying audioread instead.')
 
 class TalkingHeadDatasetHungry(data.Dataset):
-    def __init__(self, root_dir, motion_filename="talking_face.pkl", motion_templete_filename="motion_templete.pkl", 
+    def __init__(self, root_dir, motion_filename="talking_face.pkl", motion_templete_filename="motion_template.pkl", 
                  split="train", coef_fps=25, n_motions=100, crop_strategy="random", normalize_type="mix"):
         self.templete_dir = os.path.join(root_dir, motion_templete_filename)
         self.templete_dict = pickle.load(open(self.templete_dir, 'rb'))
+        # motion_template_path = "pretrained_weights/JoyVASA/motion_template/motion_template.pkl"  # ZZ modified
+        # self.templete_dict = pickle.load(open(motion_template_path, 'rb'))
         self.motion_dir = os.path.join(root_dir, motion_filename)
+        # self.motion_dir = "data/raw-video.pkl"  # ZZ modified
         self.eps = 1e-9
         self.normalize_type = normalize_type
 

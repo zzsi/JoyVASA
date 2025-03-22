@@ -163,3 +163,4 @@ def make_motion_templete(args, driving_video, suffix=".pkl"):
         motion_extractor.execute(args, suffix=suffix)
     except Exception as e:
         print(f"Exception in motion extractor: {e}")
+        raise

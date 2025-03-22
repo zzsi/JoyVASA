@@ -17,6 +17,6 @@ args = tyro.cli(ArgumentConfig)
 args.flag_do_crop = False
 args.scale = 2.3
 
-root_dir = "/path/to/data"
+root_dir = "/workspace/data/"
 video_names = sorted([os.path.join(root_dir, filename) for filename in os.listdir(root_dir) if filename.endswith("mp4")])
 process_videos(args, video_names, suffix=".pkl")

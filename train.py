@@ -17,7 +17,7 @@ from src.dataset.talkinghead_dataset_hungry import TalkingHeadDatasetHungry
 from src.modules.dit_talking_head import DitTalkingHead
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
+print(f"in train.py, device: {device}")
 def train(args, model, train_loader, val_loader, optimizer, save_dir, scheduler=None, writer=None, ):
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -368,6 +368,7 @@ def count_parameters(model):
 
 def main(args, option_text=None):
     # model
+    print(f"in main, device: {device}")
     model_kwargs = dict(
         device = device,
         target = args.target,

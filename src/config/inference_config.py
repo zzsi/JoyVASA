@@ -18,6 +18,8 @@ def load_lip_array():
 @dataclass(repr=False)  # use repr from PrintableConfig
 class InferenceConfig(PrintableConfig):
     # MOTION SEQUENCE GENERATOR
+    # checkpoint_MotionGenerator: str = make_abs_path("../../pretrained_weights/JoyVASA/motion_generator/motion_generator_hubert_chinese.pt")
+    # checkpoint_MotionGenerator: str = make_abs_path("../../pretrained_weights/chinese-hubert-base/chinese-hubert-base-fairseq-ckpt.pt")
     checkpoint_MotionGenerator: str = make_abs_path("../../pretrained_weights/JoyVASA/motion_generator/motion_generator_hubert_chinese.pt")
     checkpoint_AudioEncoder: str = make_abs_path("../../pretrained_weights/hubert-base-ls960/")
     motion_template_path: str = make_abs_path("../../pretrained_weights/JoyVASA/motion_template/motion_template.pkl")
