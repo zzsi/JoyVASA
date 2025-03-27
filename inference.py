@@ -62,6 +62,12 @@ def main():
             inference_cfg=inference_cfg,
             crop_cfg=crop_cfg
         )
+    elif args.animation_mode == "lip":
+        from src.live_portrait_lip_pipeline import LivePortraitLipPipeline
+        pipeline = LivePortraitLipPipeline(
+            inference_cfg=inference_cfg,
+            crop_cfg=crop_cfg
+        )
     else:
         raise RuntimeError(f"error args.mode: {args.mode}")
 
