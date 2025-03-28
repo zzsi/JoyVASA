@@ -192,104 +192,6 @@ class FastLipSync:
         
         logger.info(f"Model loaded successfully with {self.n_clusters} clusters")
 
-    def generate_with_beam_search(self, audio_path: str, beam_width: int = 5, 
-                                  singleton_weight: float = 1.0, pairwise_weight: float = 0.5) -> List[np.ndarray]:
-        """Generate video frames from audio using beam search optimization
-        
-        Args:
-            audio_path: Path to audio file
-            beam_width: Width of beam for search
-            singleton_weight: Weight for audio-visual alignment cost
-            pairwise_weight: Weight for temporal smoothness cost
-            
-        Returns:
-            List of generated frames
-        """
-        logger.info(f"Generating video from audio with beam search: {audio_path}")
-        
-        # Load and preprocess audio
-        audio, _ = librosa.load(audio_path, sr=16000, mono=True)
-        audio = torch.from_numpy(audio).to(self.device)
-        
-        # Extract audio features
-        audio_features = self.extract_audio_features(audio)
-        n_frames = len(audio_features)
-        
-        logger.info(f"Optimizing sequence of {n_frames} frames with beam search (width={beam_width})")
-        
-        # Calculate singleton costs: distance from each audio feature to each cluster center
-        # Shape: [n_frames, n_clusters]
-        singleton_costs = torch.zeros((n_frames, self.n_clusters))
-        
-        for i, feature in enumerate(tqdm(audio_features, desc="Computing singleton costs")):
-            # Compute negative cosine similarity (lower is better)
-            similarities = F.cosine_similarity(feature.unsqueeze(0), self.cluster_centers, dim=1)
-            singleton_costs[i] = -similarities  # Convert to cost (negative similarity)
-        
-        # Precompute pairwise costs: visual difference between all pairs of frames
-        # Shape: [n_clusters, n_clusters]
-        pairwise_costs = torch.zeros((self.n_clusters, self.n_clusters))
-        
-        logger.info("Computing pairwise costs between frames...")
-        for i in tqdm(range(self.n_clusters), desc="Computing pairwise costs"):
-            if i not in self.cluster_to_frames:
-                continue
-                
-            frame_i = torch.from_numpy(self.cluster_to_frames[i]).float()
-            
-            for j in range(self.n_clusters):
-                if j not in self.cluster_to_frames:
-                    continue
-                    
-                frame_j = torch.from_numpy(self.cluster_to_frames[j]).float()
-                
-                # Compute frame difference (L2 distance between frames)
-                # Could use more sophisticated measures focused on lip region
-                diff = torch.mean((frame_i - frame_j) ** 2)
-                pairwise_costs[i, j] = diff
-        
-        # Normalize costs to be in similar ranges
-        singleton_costs = (singleton_costs - singleton_costs.mean()) / singleton_costs.std()
-        pairwise_costs = (pairwise_costs - pairwise_costs.mean()) / pairwise_costs.std()
-        
-        # Initialize beam search
-        # Each beam element is (sequence, total_cost)
-        beams = [([], 0.0)]
-        
-        # Perform beam search
-        for frame_idx in tqdm(range(n_frames), desc="Beam search progress"):
-            candidates = []
-            
-            for sequence, cost in beams:
-                for cluster_idx in range(self.n_clusters):
-                    if cluster_idx not in self.cluster_to_frames:
-                        continue
-                        
-                    # Compute new cost with this cluster
-                    new_cost = cost + singleton_weight * singleton_costs[frame_idx, cluster_idx].item()
-                    
-                    # Add pairwise cost if this isn't the first frame
-                    if sequence:
-                        prev_cluster = sequence[-1]
-                        new_cost += pairwise_weight * pairwise_costs[prev_cluster, cluster_idx].item()
-                    
-                    # Create new candidate
-                    new_sequence = sequence + [cluster_idx]
-                    candidates.append((new_sequence, new_cost))
-            
-            # Keep top beam_width candidates
-            candidates.sort(key=lambda x: x[1])  # Sort by cost (lower is better)
-            beams = candidates[:beam_width]
-        
-        # Get best sequence
-        best_sequence, best_cost = beams[0]
-        logger.info(f"Found best sequence with cost: {best_cost}")
-        
-        # Convert sequence to frames
-        generated_frames = [self.cluster_to_frames[cluster_idx] for cluster_idx in best_sequence]
-        
-        return generated_frames
-
 
 def read_video_frames(video_path: str) -> Tuple[List[np.ndarray], float]:
     """Read video frames from video file and return frames and fps"""
@@ -325,10 +227,6 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", type=str, help="Path to the output video file", default=None)
     parser.add_argument("--fps", type=int, default=25, help="FPS of the output video for generation")
     parser.add_argument("--device", type=str, default="cpu", help="Device to run on (cpu/cuda)")
-    parser.add_argument("--use_beam_search", action="store_true", help="Use beam search for temporal smoothing")
-    parser.add_argument("--beam_width", type=int, default=5, help="Beam width for beam search")
-    parser.add_argument("--singleton_weight", type=float, default=1.0, help="Weight for audio-visual alignment")
-    parser.add_argument("--pairwise_weight", type=float, default=0.5, help="Weight for temporal smoothness")
     args = parser.parse_args()
 
     if args.mode == "generate" and args.output_path is None:
@@ -348,16 +246,6 @@ if __name__ == "__main__":
         assert os.path.exists(args.input_audio_path), f"Input audio file does not exist: {args.input_audio_path}"
         fast_lipsync = FastLipSync(device=args.device)
         fast_lipsync.load_model(model_path=args.model_path)
-        
-        if args.use_beam_search:
-            frames = fast_lipsync.generate_with_beam_search(
-                audio_path=args.input_audio_path,
-                beam_width=args.beam_width,
-                singleton_weight=args.singleton_weight,
-                pairwise_weight=args.pairwise_weight
-            )
-        else:
-            frames = fast_lipsync.generate(audio_path=args.input_audio_path)
-            
+        frames = fast_lipsync.generate(audio_path=args.input_audio_path)
         fast_lipsync.save_video(frames=frames, output_path=args.output_path)
 
