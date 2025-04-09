@@ -1,7 +1,9 @@
 import os
 import os.path as osp
 import subprocess
-from typing import List, Optional
+import numpy as np
+import pickle
+from typing import List, Optional, Dict
 from tqdm import tqdm
 from src.config.argument_config import ArgumentConfig
 from src.config.inference_config import InferenceConfig
@@ -37,13 +39,13 @@ def convert_to_wav(audio_path: str, output_dir: str) -> Optional[str]:
         return None
 
 def process_single_audio(
+    pipeline,
     reference_path: str,
     audio_path: str,
     output_dir: str,
-    animation_mode: str = "human",
     **kwargs
-) -> Optional[str]:
-    """Process a single audio file and return the output path if successful."""
+) -> Optional[Dict[str, str]]:
+    """Process a single audio file and return the output paths if successful."""
     try:
         # Convert audio to WAV if needed
         wav_path = convert_to_wav(audio_path, output_dir)
@@ -55,43 +57,40 @@ def process_single_audio(
             "reference": reference_path,
             "audio": wav_path,
             "output_dir": output_dir,
-            "animation_mode": animation_mode,
             **kwargs
         }
         
         # Create configs
         args = ArgumentConfig(**base_args)
-        inference_cfg = partial_fields(InferenceConfig, args.__dict__)
-        crop_cfg = partial_fields(CropConfig, args.__dict__)
-
-        # Initialize appropriate pipeline
-        if animation_mode == "animal":
-            pipeline = LivePortraitPipelineAnimal(
-                inference_cfg=inference_cfg,
-                crop_cfg=crop_cfg
-            )
-        elif animation_mode == "human":
-            pipeline = LivePortraitPipeline(
-                inference_cfg=inference_cfg,
-                crop_cfg=crop_cfg
-            )
-        elif animation_mode == "lip":
-            pipeline = LivePortraitLipPipeline(
-                inference_cfg=inference_cfg,
-                crop_cfg=crop_cfg
-            )
-        else:
-            raise ValueError(f"Unsupported animation mode: {animation_mode}")
-
-        # Execute pipeline
-        pipeline.execute(args)
         
-        # Return the output path
-        return osp.join(output_dir, osp.basename(audio_path).replace(".wav", ".mp4"))
+        # Execute pipeline
+        result = pipeline.execute(args)
+        
+        # For lip pipeline, result will be a tuple of (video_path, features_path)
+        if isinstance(result, tuple):
+            video_path, features_path = result
+            return {
+                "video": video_path,
+                "features": features_path
+            }
+        else:
+            # For other pipelines, result is just the video path
+            return {
+                "video": result
+            }
     
     except Exception as e:
         print(f"Error processing {audio_path}: {str(e)}")
         return None
+
+def find_audio_files(directory: str) -> List[str]:
+    """Recursively find all audio files in the given directory and its subdirectories."""
+    audio_files = []
+    for root, _, files in os.walk(directory):
+        for file in files:
+            if file.lower().endswith(('.wav', '.mp3')):
+                audio_files.append(osp.join(root, file))
+    return audio_files
 
 def batch_process_audio(
     reference_path: str,
@@ -99,46 +98,80 @@ def batch_process_audio(
     output_dir: str,
     animation_mode: str = "human",
     **kwargs
-) -> List[str]:
-    """Process all audio files in a directory and return list of successful outputs."""
+) -> List[Dict[str, str]]:
+    """Process all audio files in a directory and its subdirectories and return list of successful outputs."""
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
-    # Get list of audio files (both WAV and MP3)
-    audio_files = [f for f in os.listdir(audio_dir) if f.lower().endswith(('.wav', '.mp3'))]
+    # Get list of audio files recursively
+    audio_files = find_audio_files(audio_dir)
     if not audio_files:
-        print(f"No .wav or .mp3 files found in {audio_dir}")
+        print(f"No .wav or .mp3 files found in {audio_dir} or its subdirectories")
         return []
     
-    # Process each audio file
+    # Create base config with required arguments
+    base_args = {
+        "reference": reference_path,
+        "audio": "",  # Will be set for each file
+        "output_dir": output_dir,
+        "animation_mode": animation_mode,
+        **kwargs
+    }
+    
+    # Create configs once
+    args = ArgumentConfig(**base_args)
+    inference_cfg = partial_fields(InferenceConfig, args.__dict__)
+    crop_cfg = partial_fields(CropConfig, args.__dict__)
+
+    # Initialize appropriate pipeline once
+    if animation_mode == "animal":
+        pipeline = LivePortraitPipelineAnimal(
+            inference_cfg=inference_cfg,
+            crop_cfg=crop_cfg
+        )
+    elif animation_mode == "human":
+        pipeline = LivePortraitPipeline(
+            inference_cfg=inference_cfg,
+            crop_cfg=crop_cfg
+        )
+    elif animation_mode == "lip":
+        pipeline = LivePortraitLipPipeline(
+            inference_cfg=inference_cfg,
+            crop_cfg=crop_cfg
+        )
+    else:
+        raise ValueError(f"Unsupported animation mode: {animation_mode}")
+    
+    # Process each audio file using the same pipeline
     successful_outputs = []
-    for audio_file in tqdm(audio_files, desc="Processing audio files", unit="file"):
-        audio_path = osp.join(audio_dir, audio_file)
-        output_path = process_single_audio(
+    for audio_path in tqdm(audio_files, desc="Processing audio files", unit="file"):
+        output_paths = process_single_audio(
+            pipeline=pipeline,
             reference_path=reference_path,
             audio_path=audio_path,
             output_dir=output_dir,
-            animation_mode=animation_mode,
             **kwargs
         )
-        if output_path:
-            successful_outputs.append(output_path)
+        if output_paths:
+            successful_outputs.append(output_paths)
     
     return successful_outputs
 
 if __name__ == "__main__":
     # Example usage
     reference_path = "assets/examples/imgs/bithuman_coach_cropped.png"
-    audio_dir = "assets/examples/audios"
-    output_dir = "animations/joyvasa_test"
+    audio_dir = "data/audio_files_for_batch_inference"
+    output_dir = "data/batch_generated_videos/bithuman_coach"
     
     successful_outputs = batch_process_audio(
         reference_path=reference_path,
         audio_dir=audio_dir,
         output_dir=output_dir,
-        animation_mode="human"  # or "animal" or "lip"
+        animation_mode="lip"  # or "animal" or "human"
     )
     
     print(f"\nSuccessfully processed {len(successful_outputs)} files:")
     for output in successful_outputs:
-        print(f"- {output}") 
+        print(f"- Video: {output['video']}")
+        if 'features' in output:
+            print(f"  Features: {output['features']}") 

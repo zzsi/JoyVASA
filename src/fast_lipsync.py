@@ -1,3 +1,9 @@
+# Suppress FutureWarning and UserWarning
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=UserWarning)
+
+
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -40,23 +46,27 @@ class FastLipSync:
         self.cluster_to_frames = {}  # Maps cluster ID to list of (frame_idx, frame) tuples
         self.cluster_centers = None
         
-    def preprocess_audio(self, audio: torch.Tensor, n_frames: int = None) -> torch.Tensor:
+    def preprocess_audio(self, audio: torch.Tensor, n_frames: int = None, verbose: bool = True) -> torch.Tensor:
         """Preprocess audio with proper padding and subdivision"""
-        logger.info("Preprocessing audio...")
+        if verbose:
+            logger.info("Preprocessing audio...")
         current_audio_samples = len(audio)
         
         if n_frames is not None:
             # Training mode: adjust audio length to match video frames
             expected_audio_samples = int(16000 * n_frames / self.fps)
-            logger.info(f"Audio samples - Current: {current_audio_samples}, Expected: {expected_audio_samples}")
+            if verbose:
+                logger.info(f"Audio samples - Current: {current_audio_samples}, Expected: {expected_audio_samples}")
             
             # Trim or pad audio to match expected length
             if current_audio_samples > expected_audio_samples:
-                logger.info(f"Trimming {current_audio_samples - expected_audio_samples} audio samples")
+                if verbose:
+                    logger.info(f"Trimming {current_audio_samples - expected_audio_samples} audio samples")
                 audio = audio[:expected_audio_samples]
             elif current_audio_samples < expected_audio_samples:
                 padding_size = expected_audio_samples - current_audio_samples
-                logger.info(f"Padding {padding_size} audio samples")
+                if verbose:
+                    logger.info(f"Padding {padding_size} audio samples")
                 if self.pad_mode == 'zero':
                     padding_value = 0
                 elif self.pad_mode == 'replicate':
@@ -66,23 +76,61 @@ class FastLipSync:
                 audio = F.pad(audio, (0, padding_size), value=padding_value)
         else:
             # Generation mode: use audio as is
-            logger.info(f"Using original audio length: {current_audio_samples} samples")
+            if verbose:
+                logger.info(f"Using original audio length: {current_audio_samples} samples")
             
         return audio
     
-    def extract_audio_features(self, audio: torch.Tensor, n_frames: int = None) -> torch.Tensor:
+    def extract_audio_features(self, audio: torch.Tensor, n_frames: int = None, verbose: bool = True) -> torch.Tensor:
         """Extract audio features using wav2vec2 with proper preprocessing"""
-        logger.info("Extracting audio features...")
+        if verbose:
+            logger.info("Extracting audio features...")
         # Preprocess audio
-        audio = self.preprocess_audio(audio, n_frames)
+        audio = self.preprocess_audio(audio, n_frames, verbose)
         
         # Extract features
         with torch.no_grad():
             features = self.audio_encoder(audio.unsqueeze(0), output_fps=self.fps).last_hidden_state
             features = features.squeeze(0)  # Remove batch dimension
-            
-        logger.info(f"Extracted features shape: {features.shape}")
+        
+        if verbose:
+            logger.info(f"Extracted features shape: {features.shape}")
         return features
+    
+    def train_with_multiple_videos(self, audio_paths: List[str], video_paths: List[str], fps: int = 25):
+        """Train the model on multiple audio-video pairs"""
+        # Gather all video frames and all audio features    
+        video_frames = []
+        audio_features = []
+        for audio_path, video_path in tqdm(zip(audio_paths, video_paths), desc="Gathering video frames and audio features", total=len(audio_paths)):
+            extra_video_frames, _ = read_video_frames(video_path, verbose=False)
+            video_frames.extend(extra_video_frames)
+            # Load and preprocess audio
+            audio, _ = librosa.load(audio_path, sr=16000, mono=True)
+            audio = torch.from_numpy(audio).to(self.device)
+            extra_audio_features = self.extract_audio_features(audio, n_frames=len(extra_video_frames), verbose=False)
+            audio_features.extend(extra_audio_features)
+        
+        # convert to numpy arrays
+        audio_features = np.stack(audio_features)
+            
+        # Perform clustering on audio features
+        logger.info(f"Performing K-means clustering with {self.n_clusters} clusters using {audio_features.shape[0]} audio features...")
+        self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=42)
+        cluster_labels = self.kmeans.fit_predict(audio_features)
+        self.cluster_centers = torch.from_numpy(self.kmeans.cluster_centers_).to(self.device)
+            
+        # Store one representative frame per cluster
+        logger.info("Storing representative frames for each cluster...")
+        self.cluster_to_frames = {}  # Maps cluster ID to a single representative frame
+        for label, frame in zip(cluster_labels, video_frames):
+            if label not in self.cluster_to_frames:
+                # Store only the first frame we see for each cluster
+                self.cluster_to_frames[label] = frame
+        
+        # Log cluster statistics
+        logger.info(f"Stored {len(self.cluster_to_frames)} representative frames")
+            
     
     def train(self, audio_path: str, video_frames: List[np.ndarray], fps: int = 25):
         """Train the model on audio-video pairs"""
@@ -291,9 +339,10 @@ class FastLipSync:
         return generated_frames
 
 
-def read_video_frames(video_path: str) -> Tuple[List[np.ndarray], float]:
+def read_video_frames(video_path: str, verbose: bool = True) -> Tuple[List[np.ndarray], float]:
     """Read video frames from video file and return frames and fps"""
-    logger.info(f"Reading video frames from: {video_path}")
+    if verbose:
+        logger.info(f"Reading video frames from: {video_path}")
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     frames = []
@@ -303,7 +352,8 @@ def read_video_frames(video_path: str) -> Tuple[List[np.ndarray], float]:
             break
         frames.append(frame)
     cap.release()
-    logger.info(f"Read {len(frames)} frames at {fps} FPS")
+    if verbose:
+        logger.info(f"Read {len(frames)} frames at {fps} FPS")
     return frames, fps
 
 
@@ -317,11 +367,12 @@ if __name__ == "__main__":
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument("--mode", type=str, default="generate", choices=["train", "generate"])
-    parser.add_argument("--model_path", type=str, default="fast_lipsync.pth", help="Path to the model file")
+    parser.add_argument("--model_path", type=str, default="fast_lipsync_dating_coach.pth", help="Path to the model file")
+    parser.add_argument("--train_dir", type=str, default="data/batch_generated_videos/bithuman_coach", help="Path to the directory containing audio and video files for training")
     parser.add_argument("--train_audio_path", type=str, default="data/raw-video.wav", help="Path to the audio file for training")
     parser.add_argument("--train_video_path", type=str, default="animations/joyvasa_005_raw-video_lip_temp.mp4", help="Path to the video file for training")
     parser.add_argument("--n_clusters", type=int, default=1000, help="Number of clusters for clustering")
-    parser.add_argument("--input_audio_path", type=str, required=False, help="Path to the input audio file for generation")
+    parser.add_argument("--input_audio_path", type=str, required=False, help="Path to the input audio file for generation", default="assets/examples/audios/joyvasa_001.wav")
     parser.add_argument("--output_path", type=str, help="Path to the output video file", default=None)
     parser.add_argument("--fps", type=int, default=25, help="FPS of the output video for generation")
     parser.add_argument("--device", type=str, default="cpu", help="Device to run on (cpu/cuda)")
@@ -332,16 +383,39 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.mode == "generate" and args.output_path is None:
-        args.output_path = args.input_audio_path.replace(".wav", "_fast_lipsync.mp4")
+        import datetime
+
+        current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.output_path = (
+            args.input_audio_path.replace(".mp3", "_fast_lipsync.mp4")
+            .replace(".wav", "_fast_lipsync.mp4")
+            .replace("fast_lipsync.mp4", f"fast_lipsync_{current_time}.mp4")
+        )
 
     logger.info(f"Running in {args.mode} mode on device: {args.device}")
 
     if args.mode == "train":
         fast_lipsync = FastLipSync(device=args.device, n_clusters=args.n_clusters)
         # Read video frames from video file
-        video_frames, fps = read_video_frames(args.train_video_path)
-        fast_lipsync.train(args.train_audio_path, video_frames, fps)
-        fast_lipsync.save_video(frames=video_frames, output_path=args.output_path)
+        
+        if args.train_dir:
+            import glob
+
+            wildcard = os.path.join(args.train_dir, "*_temp.mp4")
+            logger.info(f"Training with multiple videos in directory: {wildcard}")
+            video_mp4_paths = list(glob.glob(wildcard))[:2000]
+            audio_paths = [x.replace("_temp.mp4", ".mp4") for x in video_mp4_paths]
+            assert len(video_mp4_paths) > 0, f"No video files found in the training directory: {wildcard}"
+            assert len(audio_paths) > 0, f"No audio files found in the training directory: {wildcard}"
+            fast_lipsync.train_with_multiple_videos(
+                audio_paths=audio_paths,
+                video_paths=video_mp4_paths,
+                fps=args.fps
+            )
+        else:
+            video_frames, fps = read_video_frames(args.train_video_path)
+            fast_lipsync.train(args.train_audio_path, video_frames, fps)
+            fast_lipsync.save_video(frames=video_frames, output_path=args.output_path)
         fast_lipsync.save_model(model_path=args.model_path)
     elif args.mode == "generate":
         # Make sure the input audio file exists

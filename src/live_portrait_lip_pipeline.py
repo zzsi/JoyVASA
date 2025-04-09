@@ -10,6 +10,8 @@ torch.backends.cudnn.benchmark = True
 import cv2; cv2.setNumThreads(0); cv2.ocl.setUseOpenCL(False)
 import os
 import os.path as osp
+import numpy as np
+import pickle
  
 from rich.progress import track
 
@@ -79,6 +81,9 @@ class LivePortraitLipPipeline(object):
             mask_ori_float = prepare_paste_back(inf_cfg.mask_crop, crop_info['M_c2o'], dsize=(source_rgb_lst[0].shape[1], source_rgb_lst[0].shape[0]))
 
         ######## animate ########
+        # Store lip features for each frame
+        lip_features = []
+        
         for i in track(range(n_frames), description='🚀Animating Lip Region...', total=n_frames):
             x_d_i_info = driving_template_dct['motion'][i]
             x_d_i_info = dct2device(x_d_i_info, device)
@@ -109,6 +114,14 @@ class LivePortraitLipPipeline(object):
             I_p_i = self.live_portrait_wrapper.parse_output(out['out'])[0]
             I_p_lst.append(I_p_i)
 
+            # Store lip features for this frame
+            lip_features.append({
+                'keypoints': x_d_i_new.cpu().numpy(),
+                'delta': delta_new.cpu().numpy(),
+                'scale': scale_new.cpu().numpy(),
+                'translation': t_new.cpu().numpy()
+            })
+
             if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching:
                 I_p_pstbk = paste_back(I_p_i, crop_info['M_c2o'], source_rgb_lst[0], mask_ori_float)
                 I_p_pstbk_lst.append(I_p_pstbk)
@@ -122,4 +135,14 @@ class LivePortraitLipPipeline(object):
             images2video(I_p_lst, wfp=temp_video, fps=inf_cfg.output_fps)
         final_video = osp.join(args.output_dir, f'{basename(args.reference)}_{basename(args.audio)}_lip.mp4')
         add_audio_to_video(temp_video, args.audio, final_video, remove_temp=False)
-        return final_video
+
+        # Save lip features
+        features_path = osp.join(args.output_dir, f'{basename(args.reference)}_{basename(args.audio)}_lip_features.pkl')
+        with open(features_path, 'wb') as f:
+            pickle.dump({
+                'fps': inf_cfg.output_fps,
+                'n_frames': n_frames,
+                'features': lip_features
+            }, f)
+
+        return final_video, features_path

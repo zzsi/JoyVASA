@@ -9,5 +9,6 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 RUN pip install fairseq
+RUN pip install git+https://github.com/openai/CLIP.git
 # this is to copy the model weights and code
-COPY . .
+# COPY . .
