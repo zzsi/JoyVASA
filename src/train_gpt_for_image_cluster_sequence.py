@@ -11,6 +11,7 @@ First, we will tackle unconditional generation.
 
 Then, we will add an audio (frames of audio features) prompt which aligns with the video cluster id sequence.
 """
+from dataclasses import asdict
 import json
 import os
 import numpy as np
@@ -89,6 +90,7 @@ def main():
             n_layer=3,
             n_head=3,
             n_embd=768,
+            max_iters=20000,
         )
     )
     dataset_builder = VideoClusterIdSequenceDatasetBuilder(
@@ -96,7 +98,8 @@ def main():
     )
     # save the config to the log directory
     with open(os.path.join(pipeline.config.log_dir, "config.json"), "w") as f:
-        json.dump(pipeline.config.to_dict(), f)
+        config_dict = asdict(pipeline.config)
+        json.dump(config_dict, f)
     pipeline.fit(dataset_builder)
 
 
