@@ -368,6 +368,25 @@ class ImageClusterGenerator:
                 # Reconstruct as (frame_idx, cluster_id) tuples
                 self.video_sequences[video_path] = list(zip(frame_indices, cluster_ids))
         
+        # Load representative frames
+        frames_path = os.path.join(input_dir, "cluster_frames.npy")
+        all_frames = np.load(frames_path, allow_pickle=True).item()
+        
+        # Load frames metadata
+        frames_metadata_path = os.path.join(input_dir, "representative_frames.json")
+        with open(frames_metadata_path, 'r') as f:
+            representative_frames = json.load(f)
+            
+        # Reconstruct cluster_to_frames dictionary
+        self.cluster_to_frames = {}
+        for cluster_id, frame_array in all_frames.items():
+            metadata = representative_frames[str(cluster_id)]
+            self.cluster_to_frames[cluster_id] = [(
+                metadata["video_path"],
+                metadata["frame_idx"],
+                frame_array
+            )]
+        
         logger.info(f"Cluster data loaded successfully with {self.n_clusters} clusters")
     
     def find_nearest_cluster(self, frame: np.ndarray) -> int:

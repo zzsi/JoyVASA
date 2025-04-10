@@ -209,36 +209,44 @@ class GPTInferencePipeline:
             with ctx:
                 for k in range(num_samples):
                     y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
-                    print(y)
-                    print("---------------")
+                    yield y
 
 
 if __name__ == "__main__":
     start_token = 767
     # main(start_token=767)
 
-    # gpt_inference_pipeline = GPTInferencePipeline(
-    #     ckpt_path="data/gpt_logs/unconditional_generation/batch128_block3/ckpt.pt",
-    #     device="cpu",
-    # )
-    # gpt_inference_pipeline.generate(
-    #     start_ids=np.array([[9]]),
-    #     max_new_tokens=128,
-    #     num_samples=1,
-    # )
-
-    detokenize(
-        token_ids=[  9,   9,  85,  85,  85,  56, 100, 100, 100, 100, 101, 101, 101, 101,
-         101,  81, 103,  40,  33,  33,  89,   6,  45,  45,  45,  45,  18,  18,
-          63,  63,  63,  92,  63,  63,  63,  98,  98,  46,  46,  46,  46,  46,
-          46,  46,  98,  98,  98,  22,  22,  22,  98,  98,  98,  46,  46,  98,
-           0,   0,   0,   0,   0,  71,  32,  85,  56,  50,  50,  50,  45,  45,
-          45,  45,  45,  45,  18,  92,  92,  63,  63,  63,  63,  63,  63,  63,
-          63,  63,  63,  63,  63,  46,  98,  46,  46,  46,  71,  71,  46,  98,
-          22,  63,  63,  63,  63,  63,  63,  18,  63,  22,  46,  46,  46,  89,
-          95,  98,  46,  46,  20,   9,  61, 127, 127,  48,  48,  48,  48,  48,
-          48,  57, 125],
-        cluster_data_dir="data/batch_generated_videos/bithuman_coach_image_clusters",
-        output_path="data/batch_generated_videos/bithuman_coach_image_clusters/detokenized_video.mp4",
-        fps=25,
+    gpt_inference_pipeline = GPTInferencePipeline(
+        ckpt_path="data/gpt_logs/unconditional_generation/batch128_block3/ckpt.pt",
+        device="cpu",
     )
+    for i, y in enumerate(gpt_inference_pipeline.generate(
+        start_ids=np.array([[125]]),
+        max_new_tokens=128,
+        num_samples=5,
+    )):
+        print(y)
+        print("---------------")
+
+        detokenize(
+            token_ids=y[0].tolist(),
+            cluster_data_dir="data/batch_generated_videos/bithuman_coach_image_clusters",
+            output_path=f"data/batch_generated_videos/bithuman_coach_image_clusters/detokenized_videos/generated_{y[0].tolist()[0]}_{i}.mp4",
+            fps=25,
+        )
+
+        if i == 0:
+            import time
+            # test the average latency of the generation
+            start_time = time.time()
+            n = 100
+            for _ in range(n):
+                gpt_inference_pipeline.generate(
+                    start_ids=[10] * 5,
+                    max_new_tokens=1,
+                    num_samples=1,
+                )
+            end_time = time.time()
+            print(f"Average latency: {(end_time - start_time) * 1000 / n} ms")
+            import sys
+            sys.exit()
