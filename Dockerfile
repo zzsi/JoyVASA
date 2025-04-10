@@ -10,5 +10,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 RUN pip install fairseq
 RUN pip install git+https://github.com/openai/CLIP.git
+RUN pip install git+https://github.com/kungfuai/CVlization.git
+RUN pip install wandb
 # this is to copy the model weights and code
 # COPY . .
