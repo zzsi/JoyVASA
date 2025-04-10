@@ -15,7 +15,9 @@ from dataclasses import asdict
 import json
 import os
 import numpy as np
-from cvlization.torch.training_pipeline.lm.gpt import NanoGPTTrainingPipeline
+import torch
+from contextlib import nullcontext
+from cvlization.torch.training_pipeline.lm.gpt import NanoGPTTrainingPipeline, GPTConfig, GPT
 
 
 def load_video_cluster_id_sequences(json_path: str) -> list[list[int]]:
@@ -79,18 +81,21 @@ class VideoClusterIdSequenceDatasetBuilder:
         return self.val_video_cluster_id_sequences
 
 
-def main():
+def main(start_token: int = 767):
     pipeline = NanoGPTTrainingPipeline(
         config=NanoGPTTrainingPipeline.Config(
             log_dir="data/gpt_logs/unconditional_generation",  # edit me: For each run, try to use a different log directory.
-            block_size=32,
-            vocab_size=768,
-            batch_size=32,
+            block_size=3,
+            vocab_size=start_token + 1,
+            batch_size=128,
             flatten_tokens=False,
-            n_layer=3,
+            n_layer=6,
             n_head=3,
-            n_embd=768,
-            max_iters=20000,
+            n_embd=36,
+            start_token=start_token,
+            # n_embd=768,
+            log_interval=100,
+            max_iters=200000,
         )
     )
     dataset_builder = VideoClusterIdSequenceDatasetBuilder(
@@ -103,5 +108,137 @@ def main():
     pipeline.fit(dataset_builder)
 
 
+def detokenize(token_ids: list[int], cluster_data_dir: str, output_path: str = None, fps: int = 25) -> np.ndarray:
+    """
+    Detokenize the image cluster ids into images.
+    
+    Args:
+        token_ids: List of cluster IDs to detokenize
+        cluster_data_dir: Directory containing the cluster data (cluster_centers.npy, etc.)
+        output_path: Optional path to save the detokenized video
+        fps: Frames per second for the output video
+        
+    Returns:
+        List of frames corresponding to the token IDs
+    """
+    import os
+    import numpy as np
+    import logging
+    from src.generate_image_clusters import ImageClusterGenerator
+    from src.utils.video import images2video
+    
+    logger = logging.getLogger(__name__)
+    
+    # Initialize the cluster generator and load the data
+    cluster_generator = ImageClusterGenerator(device='cpu')
+    cluster_generator.load_cluster_data(cluster_data_dir)
+    
+    # Get the first frame from any cluster to determine dimensions
+    first_valid_frame = None
+    print(cluster_generator.cluster_to_frames)
+    for cluster_id in range(cluster_generator.n_clusters):
+        if cluster_id in cluster_generator.cluster_to_frames and cluster_generator.cluster_to_frames[cluster_id]:
+            first_valid_frame = cluster_generator.cluster_to_frames[cluster_id][0][2]  # Get the frame array
+            break
+    
+    if first_valid_frame is None:
+        logger.warning("No valid frames found in any cluster.")
+        return []
+    
+    height, width = first_valid_frame.shape[:2]
+    
+    # Process each cluster ID in the sequence
+    frames = []
+    logger.info(f"Detokenizing the cluster sequence: {token_ids}")
+    
+    for cluster_id in token_ids:
+        if cluster_id not in cluster_generator.cluster_to_frames or not cluster_generator.cluster_to_frames[cluster_id]:
+            # If no valid frame for this cluster, use a black frame
+            frame = np.zeros((height, width, 3), dtype=np.uint8)
+        else:
+            # Select a representative frame from the cluster
+            # For simplicity, just use the first frame in the cluster
+            frame = cluster_generator.cluster_to_frames[cluster_id][0][2]
+        
+        frames.append(frame)
+    
+    # Save the video if output path is provided
+    if output_path:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        images2video(frames, wfp=output_path, fps=fps, image_mode='bgr')
+        logger.info(f"Generated detokenized video: {output_path}")
+    
+    return frames
+
+
+class GPTInferencePipeline:
+    def __init__(self, ckpt_path: str, device: str = "cuda"):
+        self.ckpt_path = ckpt_path
+        self.device = device
+
+    def generate(self, start_ids: torch.Tensor, max_new_tokens: int = 128, num_samples: int = 1, temperature: float = 1.0, top_k: int = 10):
+        dtype = (
+            "bfloat16"
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+            else "float16"
+        )
+        ptdtype = {
+            "float32": torch.float32,
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+        }[dtype]
+        ctx = (
+            nullcontext()
+            if self.device == "cpu"
+            else torch.amp.autocast(device_type=self.device, dtype=ptdtype)
+        )
+        checkpoint = torch.load(self.ckpt_path, map_location=self.device)
+        gptconf = GPTConfig(**checkpoint["model_args"])
+        model = GPT(gptconf)
+        state_dict = checkpoint["model"]
+        unwanted_prefix = "_orig_mod."
+        for k, v in list(state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
+        model.load_state_dict(state_dict)
+        model.eval()
+        model.to(self.device)
+        assert start_ids.ndim == 2, f"start_ids should be a 2D tensor, got {start_ids.ndim}"
+        x = torch.tensor(start_ids, dtype=torch.long, device=self.device)
+        with torch.no_grad():
+            with ctx:
+                for k in range(num_samples):
+                    y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
+                    print(y)
+                    print("---------------")
+
+
 if __name__ == "__main__":
-    main()
+    start_token = 767
+    # main(start_token=767)
+
+    # gpt_inference_pipeline = GPTInferencePipeline(
+    #     ckpt_path="data/gpt_logs/unconditional_generation/batch128_block3/ckpt.pt",
+    #     device="cpu",
+    # )
+    # gpt_inference_pipeline.generate(
+    #     start_ids=np.array([[9]]),
+    #     max_new_tokens=128,
+    #     num_samples=1,
+    # )
+
+    detokenize(
+        token_ids=[  9,   9,  85,  85,  85,  56, 100, 100, 100, 100, 101, 101, 101, 101,
+         101,  81, 103,  40,  33,  33,  89,   6,  45,  45,  45,  45,  18,  18,
+          63,  63,  63,  92,  63,  63,  63,  98,  98,  46,  46,  46,  46,  46,
+          46,  46,  98,  98,  98,  22,  22,  22,  98,  98,  98,  46,  46,  98,
+           0,   0,   0,   0,   0,  71,  32,  85,  56,  50,  50,  50,  45,  45,
+          45,  45,  45,  45,  18,  92,  92,  63,  63,  63,  63,  63,  63,  63,
+          63,  63,  63,  63,  63,  46,  98,  46,  46,  46,  71,  71,  46,  98,
+          22,  63,  63,  63,  63,  63,  63,  18,  63,  22,  46,  46,  46,  89,
+          95,  98,  46,  46,  20,   9,  61, 127, 127,  48,  48,  48,  48,  48,
+          48,  57, 125],
+        cluster_data_dir="data/batch_generated_videos/bithuman_coach_image_clusters",
+        output_path="data/batch_generated_videos/bithuman_coach_image_clusters/detokenized_video.mp4",
+        fps=25,
+    )

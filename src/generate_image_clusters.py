@@ -274,6 +274,34 @@ class ImageClusterGenerator:
         np.save(cluster_centers_path, self.cluster_centers.cpu().numpy())
         logger.info(f"Saved cluster centers to {cluster_centers_path}")
         
+        # Save representative frames for each cluster
+        # Only save the first frame for each cluster as that's what we use for detokenization
+        representative_frames = {}
+        all_frames = {}  # Dictionary to store all frames in a single structure
+        
+        for cluster_id in self.cluster_to_frames:
+            if self.cluster_to_frames[cluster_id]:
+                # Store only the first frame for each cluster
+                # Each entry is (video_path, frame_idx, frame_array)
+                frame_data = self.cluster_to_frames[cluster_id][0]
+                # Convert frame array to list for JSON serialization
+                representative_frames[str(cluster_id)] = {
+                    "video_path": frame_data[0],
+                    "frame_idx": int(frame_data[1]),
+                    "frame_shape": frame_data[2].shape
+                }
+                # Store the frame in our dictionary
+                all_frames[cluster_id] = frame_data[2]
+        
+        # Save all frames in a single NPY file
+        frames_path = os.path.join(output_dir, "cluster_frames.npy")
+        np.save(frames_path, all_frames)
+        
+        frames_metadata_path = os.path.join(output_dir, "representative_frames.json")
+        with open(frames_metadata_path, 'w') as f:
+            json.dump(representative_frames, f, indent=2)
+        logger.info(f"Saved representative frames for {len(representative_frames)} clusters")
+        
         # Prepare video sequences data
         video_paths = list(self.video_sequences.keys())
         
@@ -450,11 +478,11 @@ def main():
                         default="data/batch_generated_videos/bithuman_coach/*_temp.mp4")
     parser.add_argument("--output_dir", type=str, required=False, help="Output directory for results",
                         default="data/batch_generated_videos/bithuman_coach_image_clusters")
-    parser.add_argument("--n_clusters", type=int, default=500, help="Number of clusters")
+    parser.add_argument("--n_clusters", type=int, default=128, help="Number of clusters")
     parser.add_argument("--frame_interval", type=int, default=1, help="Extract every Nth frame")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run on (cuda/cpu)")
     parser.add_argument("--model_name", type=str, default="ViT-B/32", help="CLIP model name")
-    parser.add_argument("--max_frames", type=int, default=50000, help="Maximum number of frames to process")
+    parser.add_argument("--max_frames", type=int, default=90000, help="Maximum number of frames to process")
     
     args = parser.parse_args()
     
