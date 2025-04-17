@@ -17,7 +17,7 @@ import os
 import numpy as np
 import torch
 from contextlib import nullcontext
-from cvlization.torch.training_pipeline.lm.gpt import NanoGPTTrainingPipeline, GPTConfig, GPT
+from src.gpt import NanoGPTTrainingPipeline, GPTConfig, GPT
 
 
 def load_video_cluster_id_sequences(json_path: str) -> list[list[int]]:
@@ -225,7 +225,7 @@ if __name__ == "__main__":
         max_new_tokens=128,
         num_samples=5,
     )):
-        print(y)
+        # print(y)
         print("---------------")
 
         detokenize(
@@ -248,5 +248,5 @@ if __name__ == "__main__":
                 )
             end_time = time.time()
             print(f"Average latency: {(end_time - start_time) * 1000 / n} ms")
-            import sys
-            sys.exit()
+            # import sys
+            # sys.exit()

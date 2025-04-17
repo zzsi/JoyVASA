@@ -24,6 +24,10 @@ from typing import List, Tuple, Dict, Optional, List
 import clip
 import json
 from .utils.video import images2video
+import librosa
+import soundfile as sf
+import subprocess
+import tempfile
 
 # Set up logging
 logging.basicConfig(
@@ -52,6 +56,7 @@ class ImageClusterGenerator:
         self.cluster_to_frames = {}  # Maps cluster ID to list of (video_path, frame_idx) tuples
         self.frame_to_cluster = {}   # Maps frame key to cluster ID
         self.video_sequences = {}    # Maps video path to list of (frame_idx, cluster_id) tuples
+        self.audio_features = {}     # Maps video path to audio features array
         
     def extract_image_embeddings(self, video_frames: List[Tuple[str, int, np.ndarray]], batch_size: int = 32) -> torch.Tensor:
         """Extract embeddings for a list of video frames using CLIP"""
@@ -262,6 +267,113 @@ class ImageClusterGenerator:
         
         logger.info(f"All detokenized videos saved to {videos_dir}")
     
+    def extract_audio_features(self, video_path: str, frame_indices: List[int], fps: float, 
+                             feature_type: str = "mfcc", n_mfcc: int = 13) -> np.ndarray:
+        """
+        Extract audio features from a video file.
+        
+        Args:
+            video_path: Path to the video file
+            frame_indices: List of frame indices to extract features for
+            fps: Frames per second of the video
+            feature_type: Type of audio features to extract ('mfcc', 'mel', etc.)
+            n_mfcc: Number of MFCC coefficients to extract
+            
+        Returns:
+            Array of audio features, one per frame
+        """
+        logger.info(f"Extracting audio features from video: {video_path}")
+        
+        # Create a temporary file for the audio
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
+            temp_audio_path = temp_audio.name
+        
+        try:
+            # Extract audio from video using ffmpeg
+            # subprocess.run([
+            #     "ffmpeg", "-i", video_path, 
+            #     "-vn", "-acodec", "pcm_s16le", 
+            #     "-ar", "16000", "-ac", "1", 
+            #     "-y", temp_audio_path
+            # ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            # Load audio file
+            # audio, sr = librosa.load(temp_audio_path, sr=16000)
+            audio, sr = librosa.load(video_path, sr=16000)
+            
+            # Calculate frame duration in seconds
+            frame_duration = 1.0 / fps
+            
+            # Calculate the minimum FFT size based on the shortest possible audio segment
+            # We want n_fft to be at most the length of the shortest audio segment
+            min_samples_per_frame = int(frame_duration * sr)
+            # Use the next power of 2 that's smaller than or equal to min_samples_per_frame
+            # or at least 32 samples (very small but still reasonable)
+            n_fft = max(32, 2 ** int(np.log2(min(min_samples_per_frame, 2048))))
+            logger.info(f"Using FFT size of {n_fft} for audio segments of approximately {min_samples_per_frame} samples")
+            
+            # Extract features for each frame
+            features = []
+            for frame_idx in frame_indices:
+                # Calculate start and end time for this frame
+                start_time = frame_idx * frame_duration
+                end_time = (frame_idx + 1) * frame_duration
+                
+                # Convert to sample indices
+                start_sample = int(start_time * sr)
+                end_sample = int(end_time * sr)
+                
+                # Ensure we don't go beyond the audio length
+                if start_sample >= len(audio):
+                    # If we're beyond the audio length, use the last frame's features
+                    if features:
+                        features.append(features[-1])
+                    else:
+                        # If this is the first frame and we're beyond the audio length,
+                        # create a zero feature vector
+                        if feature_type == "mfcc":
+                            features.append(np.zeros(n_mfcc))
+                        else:
+                            features.append(np.zeros(128))  # Default for mel spectrogram
+                    continue
+                
+                # Extract the audio segment for this frame
+                if end_sample > len(audio):
+                    end_sample = len(audio)
+                
+                frame_audio = audio[start_sample:end_sample]
+                
+                # Handle very short audio segments
+                if len(frame_audio) < n_fft:
+                    # If the audio segment is too short, pad it with zeros
+                    frame_audio = np.pad(frame_audio, (0, n_fft - len(frame_audio)))
+                
+                # Extract features
+                if feature_type == "mfcc":
+                    frame_features = librosa.feature.mfcc(y=frame_audio, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft)
+                    # Take the mean across time
+                    frame_features = np.mean(frame_features, axis=1)
+                elif feature_type == "mel":
+                    frame_features = librosa.feature.melspectrogram(y=frame_audio, sr=sr, n_fft=n_fft)
+                    # Convert to log scale
+                    frame_features = librosa.power_to_db(frame_features, ref=np.max)
+                    # Take the mean across time
+                    frame_features = np.mean(frame_features, axis=1)
+                else:
+                    raise ValueError(f"Unsupported feature type: {feature_type}")
+                
+                features.append(frame_features)
+            
+            # Verify that audio features length matches frame indices length
+            assert len(features) == len(frame_indices), f"Audio features length ({len(features)}) does not match frame indices length ({len(frame_indices)}) for video {video_path}"
+            
+            return np.array(features)
+            
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_audio_path):
+                os.unlink(temp_audio_path)
+    
     def save_cluster_data(self, output_dir: str):
         """Save cluster centers and video sequences to files"""
         logger.info(f"Saving cluster data to {output_dir}")
@@ -307,15 +419,44 @@ class ImageClusterGenerator:
         
         # Create a dictionary to store sequences
         sequences_dict = {}
+        audio_features_dict = {}
+        
         for video_path in video_paths:
-            # Convert (frame_idx, cluster_id) tuples to a dictionary
-            # Convert numpy types to Python native types for JSON serialization
+            # Get frame indices and cluster IDs
             frame_indices = [int(idx) for idx, _ in self.video_sequences[video_path]]
             cluster_ids = [int(cid) for _, cid in self.video_sequences[video_path]]
-            sequences_dict[video_path] = {
-                "frame_indices": frame_indices,
-                "cluster_ids": cluster_ids
-            }
+            
+            # Extract audio features for this video
+            try:
+                # Get video FPS
+                cap = cv2.VideoCapture(video_path)
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                cap.release()
+                
+                # Extract audio features
+                # The audio is actually in a differnet mp4.. 
+                audio_path = video_path.replace("_temp.mp4", ".mp4")
+                assert len(frame_indices) == len(cluster_ids), f"Frame indices length ({len(frame_indices)}) does not match cluster IDs length ({len(cluster_ids)}) for video {video_path}"
+                audio_features = self.extract_audio_features(audio_path, frame_indices, fps)
+                
+                # Verify that audio features length matches cluster IDs length
+                assert len(audio_features) == len(cluster_ids), f"Audio features length ({len(audio_features)}) does not match cluster IDs length ({len(cluster_ids)}) for video {video_path}"
+                
+                # Store in dictionary
+                audio_features_dict[video_path] = audio_features.tolist()
+                
+                # Add to sequences dictionary
+                sequences_dict[video_path] = {
+                    "frame_indices": frame_indices,
+                    "cluster_ids": cluster_ids
+                }
+            except Exception as e:
+                logger.warning(f"Failed to extract audio features for {video_path}: {e}")
+                # Still save the visual sequence even if audio extraction fails
+                sequences_dict[video_path] = {
+                    "frame_indices": frame_indices,
+                    "cluster_ids": cluster_ids
+                }
         
         # Save sequences as JSON
         sequences_path = os.path.join(output_dir, "video_sequences.json")
@@ -323,6 +464,12 @@ class ImageClusterGenerator:
             json.dump(sequences_dict, f, indent=2)
         
         logger.info(f"Saved {len(video_paths)} video sequences to {sequences_path}")
+        
+        # Save audio features
+        if audio_features_dict:
+            audio_features_path = os.path.join(output_dir, "audio_features.npy")
+            np.save(audio_features_path, audio_features_dict)
+            logger.info(f"Saved audio features for {len(audio_features_dict)} videos to {audio_features_path}")
         
         # Save metadata
         metadata = {
@@ -368,6 +515,12 @@ class ImageClusterGenerator:
                 # Reconstruct as (frame_idx, cluster_id) tuples
                 self.video_sequences[video_path] = list(zip(frame_indices, cluster_ids))
         
+        # Load audio features if available
+        audio_features_path = os.path.join(input_dir, "audio_features.npy")
+        if os.path.exists(audio_features_path):
+            self.audio_features = np.load(audio_features_path, allow_pickle=True).item()
+            logger.info(f"Loaded audio features for {len(self.audio_features)} videos")
+        
         # Load representative frames
         frames_path = os.path.join(input_dir, "cluster_frames.npy")
         all_frames = np.load(frames_path, allow_pickle=True).item()
@@ -409,7 +562,7 @@ class ImageClusterGenerator:
 
 def extract_frames_from_video(video_path: str, frame_interval: int = 1, verbose: bool = False) -> List[Tuple[str, int, np.ndarray]]:
     """Extract frames from a video file and return them as numpy arrays"""
-    logger.info(f"Extracting frames from video: {video_path}")
+    # logger.info(f"Extracting frames from video: {video_path}")
     
     # Open video file
     cap = cv2.VideoCapture(video_path)
@@ -484,7 +637,7 @@ def process_videos(video_pattern: str, output_dir: str, n_clusters: int = 100,
     cluster_generator.generate_detokenized_videos(output_dir)
     cluster_generator.create_cluster_visualization(clusters_dir)
     
-    # Save cluster data
+    # Save cluster data (including audio features)
     cluster_generator.save_cluster_data(output_dir)
     
     logger.info(f"Processing complete. Results saved to {output_dir}")
