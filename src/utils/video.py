@@ -188,32 +188,20 @@ def has_audio_stream(video_path: str) -> bool:
 
 
 def add_audio_to_video(silent_video_path: str, audio_video_path: str, output_video_path: str, remove_temp=True):
-    print("audio: ", audio_video_path)
-    # '-c:a', 'mp3',
-    if audio_video_path.endswith("wav"):
-        cmd = [
-            'ffmpeg',
+    cmd = [
+            '/usr/local/bin/ffmpeg',
             '-y',
-            # '-loglevel', 'quiet',
+            '-loglevel', 'quiet',
             '-i', f'{silent_video_path}',
             '-i', f'{audio_video_path}',
-            # '-c:v', 'libx264',
+            '-c:v', 'libx264',
             '-b:v', '2M', 
             '-r', '25', 
             f'{output_video_path}'
         ]
-    else:
-        cmd = [
-            'ffmpeg',
-            '-y',
-            '-i', f'"{silent_video_path}"',
-            '-i', f'"{audio_video_path}"',
-            '-map', '0:v',
-            '-map', '1:a',
-            '-c:v', 'copy',
-            '-shortest',
-            f'"{output_video_path}"'
-        ]
+    cmd_str = ' '.join(cmd)
+    print(cmd_str)
+    
     try:
         result = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
         print(f"Command output: {result}")

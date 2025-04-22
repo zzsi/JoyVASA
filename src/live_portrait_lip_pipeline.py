@@ -134,7 +134,7 @@ class LivePortraitLipPipeline(object):
         else:
             images2video(I_p_lst, wfp=temp_video, fps=inf_cfg.output_fps)
         final_video = osp.join(args.output_dir, f'{basename(args.reference)}_{basename(args.audio)}_lip.mp4')
-        add_audio_to_video(temp_video, args.audio, final_video, remove_temp=False)
+        add_audio_to_video(temp_video, args.audio, final_video, remove_temp=True)
 
         # Save lip features
         features_path = osp.join(args.output_dir, f'{basename(args.reference)}_{basename(args.audio)}_lip_features.pkl')

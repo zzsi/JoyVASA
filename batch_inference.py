@@ -159,10 +159,11 @@ def batch_process_audio(
 
 if __name__ == "__main__":
     # Example usage
-    reference_path = "assets/examples/imgs/bithuman_coach_cropped.png"
-    audio_dir = "data/audio_files_for_batch_inference"
-    output_dir = "data/batch_generated_videos/bithuman_coach"
-    
+    reference_path = "assets/examples/imgs/bithuman_coach_cropped2.png"
+    # audio_dir = "data/audio_files_for_batch_inference"
+    audio_dir = "data/conversations"
+    # output_dir = "data/batch_generated_videos/bithuman_coach"
+    output_dir = "data/conversations_joyvasa_videos/bithuman_coach2"
     successful_outputs = batch_process_audio(
         reference_path=reference_path,
         audio_dir=audio_dir,

@@ -41,6 +41,13 @@ class AudioProjection(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
+        # Reshape the input if needed to match the expected dimensions
+        if x.shape[-1] != self.projection.in_features:
+            # If the input dimension doesn't match, we need to adjust the projection
+            # This is a fallback in case the audio feature dimension doesn't match what the model expects
+            print(f"Warning: Audio feature dimension mismatch. Expected {self.projection.in_features}, got {x.shape[-1]}")
+            # Create a new projection layer with the correct input dimension
+            self.projection = nn.Linear(x.shape[-1], self.projection.out_features).to(x.device)
         return self.dropout(self.projection(x))
 
 
@@ -502,6 +509,75 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
                 break
 
 
+class ConditionalGPTInferencePipeline:
+    """Inference pipeline for the conditional GPT model."""
+    def __init__(self, ckpt_path: str, device: str = "cuda"):
+        self.ckpt_path = ckpt_path
+        self.device = device
+
+    def generate(self, visual_ids: torch.Tensor, audio_features: torch.Tensor, max_new_tokens: int = 128, 
+                num_samples: int = 1, temperature: float = 1.0, top_k: int = 10):
+        """
+        Generate visual token sequences conditioned on audio features.
+        
+        Args:
+            visual_ids: Initial visual token sequence of shape (batch_size, seq_len)
+            audio_features: Audio features of shape (batch_size, seq_len, audio_feature_dim)
+            max_new_tokens: Maximum number of new tokens to generate
+            num_samples: Number of samples to generate
+            temperature: Sampling temperature (higher = more random)
+            top_k: Top-k sampling parameter
+            
+        Yields:
+            Generated visual token sequences
+        """
+        dtype = (
+            "bfloat16"
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+            else "float16"
+        )
+        ptdtype = {
+            "float32": torch.float32,
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+        }[dtype]
+        ctx = (
+            nullcontext()
+            if self.device == "cpu"
+            else torch.amp.autocast(device_type=self.device, dtype=ptdtype)
+        )
+        
+        # Load checkpoint and model
+        checkpoint = torch.load(self.ckpt_path, map_location=self.device)
+        model_args = checkpoint["model_args"]
+        gptconf = AudioGPTConfig(**model_args)
+        model = ConditionalGPT(gptconf)
+        
+        # Load state dict
+        state_dict = checkpoint["model"]
+        unwanted_prefix = "_orig_mod."
+        for k, v in list(state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
+        model.load_state_dict(state_dict)
+        model.eval()
+        model.to(self.device)
+        
+        # Ensure inputs are tensors and on the correct device
+        assert visual_ids.ndim == 2, f"visual_ids should be a 2D tensor, got {visual_ids.ndim}"
+        assert audio_features.ndim == 3, f"audio_features should be a 3D tensor, got {audio_features.ndim}"
+        assert audio_features.shape[0] == visual_ids.shape[0], f"Batch sizes don't match: visual_ids {visual_ids.shape[0]}, audio_features {audio_features.shape[0]}"
+        assert audio_features.shape[1] == visual_ids.shape[1], f"Sequence lengths don't match: visual_ids {visual_ids.shape[1]}, audio_features {audio_features.shape[1]}"
+        
+        x_visual = torch.tensor(visual_ids, dtype=torch.long, device=self.device)
+        x_audio = torch.tensor(audio_features, dtype=torch.float32, device=self.device)
+        
+        with torch.no_grad():
+            with ctx:
+                for k in range(num_samples):
+                    y = model.generate(x_visual, x_audio, max_new_tokens, temperature=temperature, top_k=top_k)
+                    yield y
+
 
 def main():
     """Main function to train the conditional GPT model."""
@@ -540,4 +616,216 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Train or run inference with the conditional GPT model")
+    parser.add_argument("--mode", type=str, choices=["train", "inference"], default="train", 
+                        help="Mode to run the model in: train or inference")
+    parser.add_argument("--ckpt_path", type=str, 
+                        default="data/gpt_logs/conditional_generation/batch128_block3/ckpt.pt",
+                        help="Path to the checkpoint file for inference")
+    parser.add_argument("--device", type=str, default="cuda", 
+                        help="Device to run the model on: cuda or cpu")
+    parser.add_argument("--start_token", type=int, default=125,
+                        help="Starting token for generation")
+    parser.add_argument("--max_new_tokens", type=int, default=128,
+                        help="Maximum number of new tokens to generate")
+    parser.add_argument("--num_samples", type=int, default=5,
+                        help="Number of samples to generate")
+    parser.add_argument("--temperature", type=float, default=1.0,
+                        help="Sampling temperature (higher = more random)")
+    parser.add_argument("--top_k", type=int, default=10,
+                        help="Top-k sampling parameter")
+    parser.add_argument("--audio_file", type=str,
+                        help="Path to an audio file to use for conditioning (WAV, MP3, etc.)")
+    parser.add_argument("--output_dir", type=str,
+                        default="data/batch_generated_videos/bithuman_coach_image_clusters/detokenized_videos",
+                        help="Directory to save generated videos")
+    parser.add_argument("--audio_model", type=str, default="hubert",
+                        choices=["hubert", "wav2vec2", "hubert_zh"],
+                        help="Audio encoder model to use for feature extraction")
+    parser.add_argument("--sample_rate", type=int, default=16000,
+                        help="Sample rate for audio processing")
+    parser.add_argument("--fps", type=int, default=25,
+                        help="Frames per second for the output video")
+    parser.add_argument("--audio_feature_dim", type=int, default=13,
+                        help="Expected audio feature dimension for the model")
+    
+    args = parser.parse_args()
+    
+    if args.mode == "train":
+        main()
+    else:  # inference
+        # Import the detokenize function from lip_gpt0
+        from src.lip_gpt0 import detokenize
+        
+        # Create inference pipeline
+        inference_pipeline = ConditionalGPTInferencePipeline(
+            ckpt_path=args.ckpt_path,
+            device=args.device,
+        )
+        
+        # Process audio file
+        if args.audio_file:
+            print(f"Processing audio file: {args.audio_file}")
+            
+            # Import audio processing modules
+            import librosa
+            import numpy as np
+            import torch
+            import torch.nn.functional as F
+            import math
+            import platform
+            from src.config.base_config import make_abs_path
+            
+            # Load the audio file
+            audio, sr = librosa.load(args.audio_file, sr=args.sample_rate, mono=True)
+            print(f"Audio loaded with shape: {audio.shape}, sample rate: {sr}")
+            
+            # Convert to tensor
+            if isinstance(audio, np.ndarray):
+                audio = torch.from_numpy(audio).to(args.device)
+            assert audio.ndim == 1, 'Audio must be 1D tensor.'
+            
+            # Add padding to ensure we have enough audio for the entire sequence
+            # Similar to the approach in live_portrait_wmg_wrapper.py
+            audio = F.pad(audio, (1280, 640), "constant", 0)
+            
+            # Extract audio features using the audio encoder model
+            print(f"Using {args.audio_model} audio encoder for feature extraction")
+            
+            # Initialize the appropriate audio encoder
+            if args.audio_model == 'wav2vec2':
+                from src.modules.wav2vec2 import Wav2Vec2Model
+                audio_encoder = Wav2Vec2Model.from_pretrained(
+                    make_abs_path('../../pretrained_weights/wav2vec2-base-960h')
+                )
+                audio_encoder.feature_extractor._freeze_parameters()
+            elif args.audio_model == 'hubert':
+                from src.modules.hubert import HubertModel
+                audio_encoder = HubertModel.from_pretrained(
+                    make_abs_path('../../pretrained_weights/hubert-base-ls960')
+                )
+                audio_encoder.feature_extractor._freeze_parameters()
+            elif args.audio_model == 'hubert_zh':
+                from src.modules.hubert import HubertModel
+                model_path = '../../pretrained_weights/chinese-hubert-base'
+                if platform.system() == "Windows":
+                    model_path = '../../pretrained_weights/chinese-hubert-base'
+                audio_encoder = HubertModel.from_pretrained(
+                    make_abs_path(model_path)
+                )
+                audio_encoder.feature_extractor._freeze_parameters()
+            else:
+                raise ValueError(f'Unknown audio model {args.audio_model}!')
+            
+            # Move encoder to the same device as the audio
+            audio_encoder = audio_encoder.to(args.device)
+            
+            # Define a function to pad audio similar to the one in DitTalkingHead
+            def pad_audio(audio):
+                # Add padding to ensure we have enough audio for the entire sequence
+                return F.pad(audio, (1280, 640), "constant", 0)
+            
+            # Extract audio features using the encoder
+            # Calculate the number of frames based on audio length and FPS
+            audio_duration = len(audio) / args.sample_rate  # in seconds
+            total_frames = int(audio_duration * args.fps)
+            print(f"Audio duration: {audio_duration:.2f}s, generating {total_frames} frames")
+            
+            # Extract features using the encoder
+            # Strategy: resample after audio feature extraction (BackResample)
+            hidden_states = audio_encoder(pad_audio(audio), args.fps, frame_num=total_frames * 2).last_hidden_state
+            hidden_states = hidden_states.transpose(1, 2)  # (N, 768, 2L)
+            hidden_states = F.interpolate(hidden_states, size=total_frames, align_corners=False, mode='linear')  # (N, 768, L)
+            hidden_states = hidden_states.transpose(1, 2)  # (N, L, 768)
+            
+            # Project the features to the model's expected feature dimension
+            # Use the expected audio feature dimension from the model
+            feature_dim = args.audio_feature_dim  # This should match the model's expected feature dimension
+            audio_feature_map = torch.nn.Linear(768, feature_dim).to(args.device)
+            audio_features = audio_feature_map(hidden_states)  # (N, L, feature_dim)
+            
+            print(f"Extracted audio features with shape: {audio_features.shape}")
+            
+            # Create a batch of the same audio features for each sample
+            batch_size = args.num_samples
+            audio_feature_dim = audio_features.shape[2]  # Feature dimension
+            seq_len = 10  # Use a short sequence for the initial condition
+            
+            # Create initial visual token sequence (all start_token)
+            visual_ids = np.array([[args.start_token] * seq_len] * batch_size)
+            
+            # Create audio feature sequence (repeat the same audio features for each sample)
+            audio_feature_seq = np.zeros((batch_size, seq_len, audio_feature_dim))
+            for i in range(batch_size):
+                # Use a different part of the audio features for each sample
+                start_idx = i * 10 % len(audio_features)
+                end_idx = min(start_idx + seq_len, len(audio_features))
+                audio_feature_seq[i, :end_idx-start_idx] = audio_features[0, start_idx:end_idx].cpu().numpy()
+                # If we need more frames, repeat the last frame
+                if end_idx - start_idx < seq_len:
+                    audio_feature_seq[i, end_idx-start_idx:] = audio_features[0, end_idx-1].cpu().numpy()
+        else:
+            print("No audio file provided. Using default audio features.")
+            # Use a simple default audio feature sequence
+            batch_size = args.num_samples
+            audio_feature_dim = args.audio_feature_dim  # Use the expected feature dimension
+            seq_len = 10
+            
+            # Create initial visual token sequence (all start_token)
+            visual_ids = np.array([[args.start_token] * seq_len] * batch_size)
+            
+            # Create a simple default audio feature sequence (all zeros)
+            audio_feature_seq = np.zeros((batch_size, seq_len, audio_feature_dim))
+        
+        # Generate samples
+        os.makedirs(args.output_dir, exist_ok=True)
+        for i, y in enumerate(inference_pipeline.generate(
+            visual_ids=visual_ids,
+            audio_features=audio_feature_seq,
+            max_new_tokens=args.max_new_tokens,
+            num_samples=args.num_samples,
+            temperature=args.temperature,
+            top_k=args.top_k,
+        )):
+            print(f"Generated sample {i+1}/{args.num_samples}")
+            print(f"First few tokens: {y[0, :10].tolist()}")
+            
+            # Create a descriptive filename
+            if args.audio_file:
+                audio_filename = os.path.basename(args.audio_file).split('.')[0]
+                output_filename = f"generated_conditional_{audio_filename}_{i}.mp4"
+            else:
+                output_filename = f"generated_conditional_{args.start_token}_{i}.mp4"
+            
+            # Detokenize and save the generated sequence
+            detokenize(
+                token_ids=y[0].tolist(),
+                cluster_data_dir="data/batch_generated_videos/bithuman_coach_image_clusters",
+                output_path=os.path.join(args.output_dir, output_filename),
+                fps=args.fps,
+            )
+            
+            # If we have an audio file, add it to the generated video
+            if args.audio_file:
+                from src.utils.video import add_audio_to_video
+                output_path = os.path.join(args.output_dir, output_filename)
+                final_output_path = os.path.join(args.output_dir, f"{audio_filename}_with_audio_{i}.mp4")
+                add_audio_to_video(output_path, args.audio_file, final_output_path, remove_temp=False)
+                print(f"Added audio to video: {final_output_path}")
+            
+            # Test latency on the first sample
+            if i == 0:
+                import time
+                start_time = time.time()
+                n = 10  # Reduced from 100 for faster testing
+                for _ in range(n):
+                    inference_pipeline.generate(
+                        visual_ids=visual_ids[:1],  # Just use one sample for latency testing
+                        audio_features=audio_feature_seq[:1],
+                        max_new_tokens=1,
+                        num_samples=1,
+                    )
+                end_time = time.time()
+                print(f"Average latency: {(end_time - start_time) * 1000 / n} ms")

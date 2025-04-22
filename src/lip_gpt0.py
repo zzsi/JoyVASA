@@ -3,7 +3,7 @@ Use nanoGPT recipe to train a GPT model to generate image cluster sequences.
 
 The data looks like:
 
-video1: 142, 142, 142, 142, 290, 142, 142, 142, 142, 142, 290, 290, 290, 290, 290, 290, 290, 290, 290, 290, 142, 290, 142, 290, 290, 290, 290, 36, 183, 307, 183, 243, 336, 336, 167, 167, 256, 256, 72, 72, 72, 72, 364, 364, 395, 144, 396, 0, 182, 197, 284, 96, 426, 389, 138, 59, 158, 158, 451, 435, 435, 179, 179, 248, 248, 248, 366, 205, 99, 84, 284, 26, 125, 125, 103, 117, 117, 117, 287, 287, 287, 287, 476, 495, 176, 26, 125, 495, 495, 495, 495, 284, 284, 284, 26, 26, 125, 125, 125, 125, 228, 228, 90, 241, 284, 26, 4, 203, 307, 21, 21, 414, 483, 483, 483, 483, 134, 134, 205, 409, 409, 59, 95, 4, 172, 172, 59, 197, 15, 60, 60, 158, 378, 378, 378, 248, 248, 179, 179, 69, 215, 69, 179, 179, 179, 179, 179, 179, 179, 179, 179, 179, 179, 179, 179, 179, 179, 31, 31, 31, 179, 179, 179, 179, 179, 179, 179, 179, 179, 65, 65, 134
+video1: 142, 142, 142, 142, 290, 142, 142, 142, 142, 142, 290, 290, 290, 290, 290, 290, 290, 290, 290, 290, 142, 290, 142, 290, 290, 290, 290, 36, 183, 307, 183, 243, 336, 336, 167, 167, 256, 256, 72, 72, 72, 72, 364, 364, 395, 144, 396, 0, 182, 197, 284, 96, 426, 389, 138, 59, 158, 158, 451, 435, 435, 179, 179, 248, 248, 248, 366, 205, 99, 84, 284, 26, 125, 125, 103, 117, 117, 117, 287, 287, 287, 287, 476, 495, 176, 26, 125, 495, 495, 495, 495, 284, 284, 284, 26, 26, 125, 125, 125, 125, 228, 228, 90, 241, 284, 26, 4, 203, 307, 21, 21, 414, 483, 483, 483, 483, 134, 134, 205, 409, 409, 59, 95, 4, 172, 172, 59, 197, 15, 60, 60, 158, 378, 378, 378, 248, 248, 179, 179, 69, 215, 69, 179, 179, 179, 179, 179, 179, 179, 179, 179, 179, 179, 179, 179, 179, 31, 31, 31, 179, 179, 179, 179, 179, 179, 179, 179, 179, 65, 65, 134
 video2: 142, 142, 290, 290, 290, 290, 290, 290, 290, 290, 290, 2
 ...
 
@@ -213,40 +213,114 @@ class GPTInferencePipeline:
 
 
 if __name__ == "__main__":
-    start_token = 767
-    # main(start_token=767)
-
-    gpt_inference_pipeline = GPTInferencePipeline(
-        ckpt_path="data/gpt_logs/unconditional_generation/batch128_block3/ckpt.pt",
-        device="cpu",
-    )
-    for i, y in enumerate(gpt_inference_pipeline.generate(
-        start_ids=np.array([[125]]),
-        max_new_tokens=128,
-        num_samples=5,
-    )):
-        # print(y)
-        print("---------------")
-
-        detokenize(
-            token_ids=y[0].tolist(),
-            cluster_data_dir="data/batch_generated_videos/bithuman_coach_image_clusters",
-            output_path=f"data/batch_generated_videos/bithuman_coach_image_clusters/detokenized_videos/generated_{y[0].tolist()[0]}_{i}.mp4",
-            fps=25,
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Train or run inference with the GPT model")
+    parser.add_argument("--mode", type=str, choices=["train", "inference"], default="train", 
+                        help="Mode to run the model in: train or inference")
+    parser.add_argument("--ckpt_path", type=str, 
+                        default="data/gpt_logs/unconditional_generation/batch128_block3/ckpt.pt",
+                        help="Path to the checkpoint file for inference")
+    parser.add_argument("--device", type=str, default="cuda", 
+                        help="Device to run the model on: cuda or cpu")
+    parser.add_argument("--start_token", type=int, default=767,
+                        help="Starting token for generation")
+    parser.add_argument("--max_new_tokens", type=int, default=128,
+                        help="Maximum number of new tokens to generate")
+    parser.add_argument("--num_samples", type=int, default=5,
+                        help="Number of samples to generate")
+    parser.add_argument("--temperature", type=float, default=1.0,
+                        help="Sampling temperature (higher = more random)")
+    parser.add_argument("--top_k", type=int, default=10,
+                        help="Top-k sampling parameter")
+    parser.add_argument("--output_dir", type=str,
+                        default="data/batch_generated_videos/bithuman_coach_image_clusters/detokenized_videos",
+                        help="Directory to save generated videos")
+    parser.add_argument("--log_dir", type=str,
+                        default="data/gpt_logs/unconditional_generation",
+                        help="Directory to save logs and checkpoints during training")
+    parser.add_argument("--block_size", type=int, default=3,
+                        help="Block size for the model")
+    parser.add_argument("--vocab_size", type=int, default=768,
+                        help="Vocabulary size for the model")
+    parser.add_argument("--batch_size", type=int, default=128,
+                        help="Batch size for training")
+    parser.add_argument("--n_layer", type=int, default=6,
+                        help="Number of layers in the model")
+    parser.add_argument("--n_head", type=int, default=3,
+                        help="Number of attention heads in the model")
+    parser.add_argument("--n_embd", type=int, default=36,
+                        help="Embedding dimension in the model")
+    parser.add_argument("--max_iters", type=int, default=200000,
+                        help="Maximum number of training iterations")
+    
+    args = parser.parse_args()
+    
+    if args.mode == "train":
+        # Run training with the specified parameters
+        pipeline = NanoGPTTrainingPipeline(
+            config=NanoGPTTrainingPipeline.Config(
+                log_dir=args.log_dir,
+                block_size=args.block_size,
+                vocab_size=args.vocab_size,
+                batch_size=args.batch_size,
+                flatten_tokens=False,
+                n_layer=args.n_layer,
+                n_head=args.n_head,
+                n_embd=args.n_embd,
+                start_token=args.start_token,
+                log_interval=100,
+                max_iters=args.max_iters,
+            )
         )
-
-        if i == 0:
-            import time
-            # test the average latency of the generation
-            start_time = time.time()
-            n = 100
-            for _ in range(n):
-                gpt_inference_pipeline.generate(
-                    start_ids=[10] * 5,
-                    max_new_tokens=1,
-                    num_samples=1,
-                )
-            end_time = time.time()
-            print(f"Average latency: {(end_time - start_time) * 1000 / n} ms")
-            # import sys
-            # sys.exit()
+        dataset_builder = VideoClusterIdSequenceDatasetBuilder(
+            json_path="data/batch_generated_videos/bithuman_coach_image_clusters/video_sequences.json"
+        )
+        # Save the config to the log directory
+        with open(os.path.join(args.log_dir, "config.json"), "w") as f:
+            config_dict = asdict(pipeline.config)
+            json.dump(config_dict, f)
+        pipeline.fit(dataset_builder)
+    else:  # inference
+        # Create inference pipeline
+        gpt_inference_pipeline = GPTInferencePipeline(
+            ckpt_path=args.ckpt_path,
+            device=args.device,
+        )
+        
+        # Create initial visual token sequence
+        visual_ids = np.array([[args.start_token]] * args.num_samples)
+        
+        # Generate samples
+        os.makedirs(args.output_dir, exist_ok=True)
+        for i, y in enumerate(gpt_inference_pipeline.generate(
+            start_ids=visual_ids,
+            max_new_tokens=args.max_new_tokens,
+            num_samples=args.num_samples,
+            temperature=args.temperature,
+            top_k=args.top_k,
+        )):
+            print(f"Generated sample {i+1}/{args.num_samples}")
+            print(f"First few tokens: {y[0, :10].tolist()}")
+            
+            # Detokenize and save the generated sequence
+            detokenize(
+                token_ids=y[0].tolist(),
+                cluster_data_dir="data/batch_generated_videos/bithuman_coach_image_clusters",
+                output_path=os.path.join(args.output_dir, f"generated_{args.start_token}_{i}.mp4"),
+                fps=25,
+            )
+            
+            # Test latency on the first sample
+            if i == 0:
+                import time
+                start_time = time.time()
+                n = 10  # Reduced from 100 for faster testing
+                for _ in range(n):
+                    gpt_inference_pipeline.generate(
+                        start_ids=np.array([[args.start_token]]),
+                        max_new_tokens=1,
+                        num_samples=1,
+                    )
+                end_time = time.time()
+                print(f"Average latency: {(end_time - start_time) * 1000 / n} ms")
