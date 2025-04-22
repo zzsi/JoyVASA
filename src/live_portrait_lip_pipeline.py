@@ -138,7 +138,7 @@ class LivePortraitLipPipeline(object):
 
             # Apply a stronger driving multiplier for lip movements
             # This amplifies the lip animation
-            lip_multiplier = inf_cfg.driving_multiplier * 1.5  # Increase lip movement by 50%
+            lip_multiplier = inf_cfg.driving_multiplier * 1  # Increase lip movement by 50%
             
             # Apply different multipliers for lip and non-lip keypoints
             x_d_i_new_lip = x_s.clone()
