@@ -15,7 +15,7 @@ class ArgumentConfig(PrintableConfig):
 
     ########## input arguments ##########
     # reference: Annotated[str, tyro.conf.arg(aliases=["-r"])] = make_abs_path('../../assets/examples/imgs/joyvasa_005.png')  # path to the source portrait (human/animal) or video (human)
-    reference: Annotated[str, tyro.conf.arg(aliases=["-r"])] = make_abs_path('../../assets/examples/imgs/bithuman_coach_cropped2.png')  # path to the source portrait (human/animal) or video (human)
+    reference: Annotated[str, tyro.conf.arg(aliases=["-r"])] = make_abs_path('../../assets/examples/imgs/bithuman_coach_cropped4.png')  # path to the source portrait (human/animal) or video (human)
     audio:  Annotated[str, tyro.conf.arg(aliases=["-a"])] = make_abs_path('../../assets/examples/audios/joyvasa_006.wav')  # path to driving video or template (.pkl format)
     # audio:  Annotated[str, tyro.conf.arg(aliases=["-a"])] = make_abs_path('../../data/raw-video.wav')  # path to driving video or template (.pkl format)
     output_dir: Annotated[str, tyro.conf.arg(aliases=["-o"])] = make_abs_path('../../animations/')  # directory to save output video

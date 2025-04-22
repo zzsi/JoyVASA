@@ -22,7 +22,7 @@ from .utils.cropper import Cropper
 from .utils.video import images2video, add_audio_to_video
 from .utils.crop import prepare_paste_back, paste_back
 from .utils.io import load_image_rgb, resize_to_limit
-from .utils.helper import mkdir, basename, dct2device, is_image
+from .utils.helper import mkdir, basename, dct2device, is_image, calc_motion_multiplier
 from .utils.rprint import rlog as log
 from .live_portrait_wmg_wrapper import LivePortraitWrapper
 
@@ -59,6 +59,8 @@ class LivePortraitLipPipeline(object):
             log("Prepared pasteback mask done.")
         I_p_lst = []
         x_d_0_info = None
+        flag_normalize_lip = inf_cfg.flag_normalize_lip  # not overwrite
+        lip_delta_before_animation = None
 
         ######## process source info ########
         if inf_cfg.flag_do_crop:
@@ -77,12 +79,22 @@ class LivePortraitLipPipeline(object):
         f_s = self.live_portrait_wrapper.extract_feature_3d(I_s)
         x_s = self.live_portrait_wrapper.transform_keypoint(x_s_info)
 
+        # let lip-open scalar to be 0 at first
+        if flag_normalize_lip and inf_cfg.flag_relative_motion and source_lmk is not None:
+            c_d_lip_before_animation = [0.]
+            combined_lip_ratio_tensor_before_animation = self.live_portrait_wrapper.calc_combined_lip_ratio(c_d_lip_before_animation, source_lmk)
+            if combined_lip_ratio_tensor_before_animation[0][0] >= inf_cfg.lip_normalize_threshold:
+                lip_delta_before_animation = self.live_portrait_wrapper.retarget_lip(x_s, combined_lip_ratio_tensor_before_animation)
+
         if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching:
             mask_ori_float = prepare_paste_back(inf_cfg.mask_crop, crop_info['M_c2o'], dsize=(source_rgb_lst[0].shape[1], source_rgb_lst[0].shape[0]))
 
         ######## animate ########
         # Store lip features for each frame
         lip_features = []
+        
+        # Define lip keypoint indices
+        lip_indices = [6, 12, 14, 17, 19, 20]  # Lip keypoint indices
         
         for i in track(range(n_frames), description='🚀Animating Lip Region...', total=n_frames):
             x_d_i_info = driving_template_dct['motion'][i]
@@ -93,8 +105,12 @@ class LivePortraitLipPipeline(object):
 
             # Only modify lip-related keypoints
             delta_new = x_s_info['exp'].clone()
-            for lip_idx in [6, 12, 14, 17, 19, 20]:  # Lip keypoint indices
-                delta_new[:, lip_idx, :] = (x_s_info['exp'] + (x_d_i_info['exp'] - x_d_0_info['exp']))[:, lip_idx, :]
+            
+            # Apply stronger lip movement by directly using the driving expression for lip keypoints
+            # This makes the lip movements more pronounced
+            for lip_idx in lip_indices:
+                # Use the driving expression directly for lip keypoints instead of relative motion
+                delta_new[:, lip_idx, :] = x_d_i_info['exp'][:, lip_idx, :]
 
             # Keep original scale and translation
             scale_new = x_s_info['scale']
@@ -104,12 +120,45 @@ class LivePortraitLipPipeline(object):
             # Generate new keypoints
             x_d_i_new = scale_new * (x_c_s + delta_new) + t_new
 
+            # Apply motion multiplier for relative motion
+            if inf_cfg.flag_relative_motion and inf_cfg.driving_option == "expression-friendly":
+                if i == 0:
+                    x_d_0_new = x_d_i_new
+                    motion_multiplier = calc_motion_multiplier(x_s, x_d_0_new)
+                x_d_diff = (x_d_i_new - x_d_0_new) * motion_multiplier
+                x_d_i_new = x_d_diff + x_s
+
+            # Apply lip normalization if enabled
+            if flag_normalize_lip and lip_delta_before_animation is not None:
+                x_d_i_new += lip_delta_before_animation
+
             # Apply stitching if enabled
             if inf_cfg.flag_stitching:
                 x_d_i_new = self.live_portrait_wrapper.stitching(x_s, x_d_i_new)
 
+            # Apply a stronger driving multiplier for lip movements
+            # This amplifies the lip animation
+            lip_multiplier = inf_cfg.driving_multiplier * 1.5  # Increase lip movement by 50%
+            
+            # Apply different multipliers for lip and non-lip keypoints
+            x_d_i_new_lip = x_s.clone()
+            x_d_i_new_non_lip = x_s.clone()
+            
+            # Apply stronger multiplier to lip keypoints
+            for lip_idx in lip_indices:
+                x_d_i_new_lip[:, lip_idx, :] = x_s[:, lip_idx, :] + (x_d_i_new[:, lip_idx, :] - x_s[:, lip_idx, :]) * lip_multiplier
+            
+            # Apply normal multiplier to non-lip keypoints
+            for idx in range(x_s.shape[1]):
+                if idx not in lip_indices:
+                    x_d_i_new_non_lip[:, idx, :] = x_s[:, idx, :] + (x_d_i_new[:, idx, :] - x_s[:, idx, :]) * inf_cfg.driving_multiplier
+            
+            # Combine the keypoints
+            x_d_i_new = x_d_i_new_non_lip.clone()
+            for lip_idx in lip_indices:
+                x_d_i_new[:, lip_idx, :] = x_d_i_new_lip[:, lip_idx, :]
+            
             # Generate output
-            x_d_i_new = x_s + (x_d_i_new - x_s) * inf_cfg.driving_multiplier
             out = self.live_portrait_wrapper.warp_decode(f_s, x_s, x_d_i_new)
             I_p_i = self.live_portrait_wrapper.parse_output(out['out'])[0]
             I_p_lst.append(I_p_i)
