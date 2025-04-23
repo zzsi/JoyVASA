@@ -341,6 +341,17 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
             best_val_loss = checkpoint["best_val_loss"]
             self.checkpoint = checkpoint
             
+            # Clear the checkpoint after loading
+            del checkpoint
+            del state_dict
+            torch.cuda.empty_cache()  # Clear GPU memory if using CUDA
+            
+            # Clear the checkpoint directory
+            import shutil
+            shutil.rmtree(self.out_dir)
+            os.makedirs(self.out_dir, exist_ok=True)
+            print(f"Cleared checkpoint directory: {self.out_dir}")
+            
         model.to(self.config.device)
         
         if self.config.compile:
@@ -508,7 +519,8 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
                             "mfu": running_mfu * 100,  # convert to percentage
                         }
                     )
-                if losses["val"] < best_val_loss or always_save_checkpoint:
+                # if losses["val"] < best_val_loss or always_save_checkpoint:
+                if True:
                     best_val_loss = losses["val"]
                     if iter_num > 0:
                         model_args = self.model_args
@@ -533,14 +545,19 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
                                 top_k=10,
                                 mode=self.config.model_arch
                             )
-                            # Save the generated sequence
-                            example_path = os.path.join(out_dir, f"example_sequence_{iter_num}.pt")
-                            torch.save({
-                                "input_visual": example_visual,
-                                "input_audio": example_audio,
-                                "generated": generated,
-                                "iter_num": iter_num
-                            }, example_path)
+                            # Save the generated sequence as JSON
+                            example_path = os.path.join(out_dir, f"example_sequence.json")
+                            sequence_data = {
+                                "input_visual": example_visual.cpu().tolist(),
+                                "generated": generated.cpu().tolist(),
+                                "iter_num": iter_num,
+                                "ground_truth": train_visual[0:1, :].cpu().tolist()
+                            }
+                            # print and compare ground truth and generated sequence
+                            print(f"Ground truth: {train_visual[0, :].cpu().tolist()}")
+                            print(f"Generated:    {generated[0].cpu().tolist()}")
+                            with open(example_path, 'w') as f:
+                                json.dump(sequence_data, f, indent=2)
                             print(f"Saved example sequence to {example_path}")
             if iter_num == 0 and eval_only:
                 break
@@ -604,7 +621,7 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
 
 class ConditionalGPTInferencePipeline:
     """Inference pipeline for the conditional GPT model."""
-    def __init__(self, ckpt_path: str, device: str = "cuda"):
+    def __init__(self, ckpt_path: str, device: str = "cpu"):
         self.ckpt_path = ckpt_path
         self.device = device
 
@@ -687,82 +704,15 @@ def run_inference(args):
         print(f"Processing audio file: {args.audio_file}")
         print(f"Using model architecture: {args.model_arch}")
         
-        # Import audio processing modules
-        import librosa
-        import numpy as np
-        import torch
-        import torch.nn.functional as F
-        import math
-        import platform
-        from src.config.base_config import make_abs_path
-        
-        # Load the audio file
-        audio, sr = librosa.load(args.audio_file, sr=args.sample_rate, mono=True)
-        print(f"Audio loaded with shape: {audio.shape}, sample rate: {sr}")
-        
-        # Calculate number of frames based on audio duration
-        audio_duration = len(audio) / sr  # in seconds
-        total_frames = max(1, int(audio_duration * args.fps))  # Ensure at least 1 frame
-        print(f"Audio duration: {audio_duration:.2f}s, will generate {total_frames} frames")
-        
-        # Convert to tensor and reshape for HuBERT
-        if isinstance(audio, np.ndarray):
-            audio = torch.from_numpy(audio).float().to(args.device)
-        # Reshape audio to (batch_size, sequence_length)
-        audio = audio.unsqueeze(0)  # Add batch dimension
-        print(f"Audio tensor shape after reshaping: {audio.shape}")
-        
-        # Add padding to ensure we have enough audio for the entire sequence
-        audio = F.pad(audio, (1280, 640), "constant", 0)
-        
-        # Extract audio features using the audio encoder model
-        print(f"Using {args.audio_model} audio encoder for feature extraction")
-        
-        # Initialize the appropriate audio encoder
-        if args.audio_model == 'wav2vec2':
-            from src.modules.wav2vec2 import Wav2Vec2Model
-            audio_encoder = Wav2Vec2Model.from_pretrained(
-                make_abs_path('../../pretrained_weights/wav2vec2-base-960h')
-            )
-            audio_encoder.feature_extractor._freeze_parameters()
-        elif args.audio_model == 'hubert':
-            from src.modules.hubert import HubertModel
-            audio_encoder = HubertModel.from_pretrained(
-                make_abs_path('../../pretrained_weights/hubert-base-ls960')
-            )
-            audio_encoder.feature_extractor._freeze_parameters()
-        elif args.audio_model == 'hubert_zh':
-            from src.modules.hubert import HubertModel
-            model_path = '../../pretrained_weights/chinese-hubert-base'
-            if platform.system() == "Windows":
-                model_path = '../../pretrained_weights/chinese-hubert-base'
-            audio_encoder = HubertModel.from_pretrained(
-                make_abs_path(model_path)
-            )
-            audio_encoder.feature_extractor._freeze_parameters()
-        else:
-            raise ValueError(f'Unknown audio model {args.audio_model}!')
-        
-        # Move encoder to the same device as the audio
-        audio_encoder = audio_encoder.to(args.device)
-        
-        # Define a function to pad audio similar to the one in DitTalkingHead
-        def pad_audio(audio):
-            # Add padding to ensure we have enough audio for the entire sequence
-            return F.pad(audio, (1280, 640), "constant", 0)
-        
-        # Extract features using the encoder
-        with torch.no_grad():
-            hidden_states = audio_encoder(pad_audio(audio), args.fps, frame_num=total_frames * 2).last_hidden_state
-            hidden_states = hidden_states.transpose(1, 2)  # (N, 768, 2L)
-            hidden_states = F.interpolate(hidden_states, size=total_frames, align_corners=False, mode='linear')  # (N, 768, L)
-            hidden_states = hidden_states.transpose(1, 2)  # (N, L, 768)
-        
-        # Project the features to the model's expected feature dimension
-        feature_dim = args.audio_feature_dim
-        audio_feature_map = torch.nn.Linear(768, feature_dim).to(args.device)
-        audio_features = audio_feature_map(hidden_states)  # (N, L, feature_dim)
-        
+        from src.audio_utils import extract_audio_features
+        audio_features = extract_audio_features(
+            audio_file=args.audio_file,
+            sample_rate=args.sample_rate,
+            fps=args.fps,
+            device=args.device,
+            pad_audio=True,
+            audio_model=args.audio_model,
+        )
         print(f"Extracted audio features with shape: {audio_features.shape}")
         
         # Create a batch of the same audio features for each sample
@@ -792,9 +742,6 @@ def run_inference(args):
     # Generate samples
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Calculate max_new_tokens based on total_frames
-    max_new_tokens = total_frames  # We're starting from scratch, so generate all frames
-    print(f"Generating {max_new_tokens} new tokens to match {total_frames} total frames")
     
     for i, y in enumerate(inference_pipeline.generate(
         visual_ids=visual_ids,
@@ -806,6 +753,7 @@ def run_inference(args):
     )):
         print(f"Generated sample {i+1}/{args.num_samples}")
         print(f"First few tokens: {y[0, :10].tolist()}")
+        print(f"Avg feature value sequence: {audio_feature_seq[i, :10, :].mean(axis=1).tolist()}")
         
         # Create a descriptive filename
         if args.audio_file:
@@ -835,15 +783,27 @@ def run_inference(args):
             import time
             start_time = time.time()
             n = 10  # Reduced from 100 for faster testing
+            total_tokens = 0
             for _ in range(n):
-                inference_pipeline.generate(
+                assert len(audio_feature_seq.shape) == 3
+                # print(f"visual_ids: {visual_ids.shape}, audio_features: {audio_feature_seq.shape}")
+                generated = inference_pipeline.generate(
                     visual_ids=visual_ids[:1],  # Just use one sample for latency testing
-                    audio_features=audio_feature_seq[:1],
+                    audio_features=audio_feature_seq[:1, :, :],
                     num_samples=1,
                     mode=args.model_arch,  # Pass the model architecture choice
                 )
+                tokens_tensor = list(generated)[0].cpu()
+                num_elements = tokens_tensor.numel() - 1
+                total_tokens += num_elements
+                
             end_time = time.time()
-            print(f"Average latency: {(end_time - start_time) * 1000 / n} ms")
+            print("================================================ Latency test results ================================================")
+            print(f"Total tokens: {total_tokens}")
+            print(f"Average latency per token: {(end_time - start_time) * 1000 / total_tokens} ms")
+            print(f"Average tokens per second: {total_tokens / (end_time - start_time)}")
+            print("=================================================================================================================")
+
 
 def main():
     """Main function to train or run inference with the conditional GPT model."""
@@ -856,7 +816,7 @@ def main():
                         help="Model architecture to use: gpt (full transformer) or direct (simple audio-to-visual)")
     parser.add_argument("--ckpt_path", type=str, 
                         # default="data/gpt_logs/conditional_generation/batch128_block3/ckpt.pt",
-                        default="data/gpt_logs/conditional_generation/direct/batch128_block3/ckpt.pt",
+                        default="data/gpt_logs/conditional_generation/gpt/batch128_block3/ckpt.pt",
                         help="Path to the checkpoint file for inference")
     parser.add_argument("--device", type=str, default="cuda", 
                         help="Device to run the model on: cuda or cpu")
@@ -866,16 +826,19 @@ def main():
                         help="Maximum number of new tokens to generate")
     parser.add_argument("--num_samples", type=int, default=2,
                         help="Number of samples to generate")
-    parser.add_argument("--temperature", type=float, default=1.0,
+    parser.add_argument("--temperature", type=float, default=0.2,
                         help="Sampling temperature (higher = more random)")
     parser.add_argument("--top_k", type=int, default=10,
                         help="Top-k sampling parameter")
     parser.add_argument("--audio_file", type=str,
                         # default="data/conversations/0b69c3d770680d2966d07a2c85ca35a8529e03b943c4e0350f0e6e0a00fc3ad3_tts-1_nova.wav",
-                        default="data/conversations/0d25f2d1de2e0805f932a817fd254c3113443f65409612dfbd64d23c93fd6d68_tts-1_nova.wav",
+                        # default="data/conversations/0d25f2d1de2e0805f932a817fd254c3113443f65409612dfbd64d23c93fd6d68_tts-1_nova.wav",
+                        # default="data/conversations/002e4b0241534fc6f83d62452488bf1c7c05bc2ba69d840947a41d9a4727ae55_tts-1_nova.wav",  # this is good
+                        ## default="data/conversations/fbc793678b9e6aee50fdbfe44cbb8a25334b96c8ab31219190087904b17ba267_tts-1_nova.wav",  # test set, short
+                        default="data/conversations/fd53b5ded29bb8bd5e7728a0227d91453233a52bb432cba23c66e8712d1ef39b_tts-1_nova.wav",  # test set, long
                         help="Path to an audio file to use for conditioning (WAV, MP3, etc.)")
     parser.add_argument("--output_dir", type=str,
-                        default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters/gpt_generated_videos",
+                        default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters/gpt_generated_videos_gpt_block3",
                         help="Directory to save generated videos")
     parser.add_argument("--cluster_data_dir", type=str,
                         default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters",
@@ -902,13 +865,13 @@ def main():
             flatten_tokens=False,
             n_layer=6,
             n_head=3,
-            n_embd=36,
+            n_embd=507,
             start_token=args.start_token,
             log_interval=100,
             max_iters=200000,
             audio_feature_dim=768,  # Match the hubert_zh feature dimension
             # audio_proj_dim=36,  # Match n_embd for the transformer
-            audio_proj_dim=512,  # Match n_embd for the transformer
+            audio_proj_dim=507,  # Match n_embd for the transformer
             model_arch=args.model_arch,  # Pass the model architecture choice
         )
         

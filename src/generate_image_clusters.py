@@ -360,18 +360,17 @@ class ImageClusterGenerator:
         
         logger.info(f"All detokenized videos saved to {videos_dir}")
     
-    def extract_audio_features(self, audio_path, total_frames):
-        """Extract audio features from the audio file."""
-        if self.audio_feature_type == "hubert_zh":
-            return self._extract_hubert_zh_features(audio_path, total_frames)
-        elif self.audio_feature_type == "mfcc":
-            return self._extract_mfcc_features(audio_path, total_frames)
-        elif self.audio_feature_type == "mel":
-            return self._extract_mel_features(audio_path, total_frames)
-        else:
-            raise ValueError(f"Unsupported audio feature type: {self.audio_feature_type}")
-            
-    def _extract_hubert_zh_features(self, audio_path, total_frames):
+    def extract_audio_features(self, audio_path):
+        from src.audio_utils import extract_audio_features
+        return extract_audio_features(
+            audio_file=audio_path,
+            sample_rate=16000,
+            fps=self.fps,
+            device=self.device,
+            pad_audio=True,
+            audio_model=self.audio_feature_type,
+        )
+    def _extract_hubert_zh_features(self, audio_path):
         """Extract HuBERT-ZH features from the audio file."""
         logger.info(f"Extracting HuBERT-ZH features from {audio_path}")
         
@@ -385,25 +384,29 @@ class ImageClusterGenerator:
         def pad_audio(audio):
             return F.pad(audio, (1280, 640), "constant", 0)
         
-        # Extract features
-        # Calculate the number of frames based on audio length and FPS
+        # Calculate number of frames based on audio duration
         audio_duration = len(audio) / sr
-        total_frames_based_on_audio_duration = int(audio_duration * self.fps)
-        logger.info(f"Comparing total frames based on audio duration: {total_frames_based_on_audio_duration} with total frames: {total_frames}")
+        total_frames = int(audio_duration * self.fps)
+        logger.info(f"Audio duration: {audio_duration:.2f}s, will generate {total_frames} frames")
         
         # Extract features using the encoder
+        # The encoder outputs features at 50 FPS, so we need to interpolate to our desired FPS
         with torch.no_grad():
+            # Get features at 50 FPS
             hidden_states = self.audio_encoder(pad_audio(audio_tensor), self.fps, frame_num=total_frames * 2).last_hidden_state
-            hidden_states = hidden_states.transpose(1, 2)  # (N, 768, 2L)
-            hidden_states = F.interpolate(hidden_states, size=total_frames, align_corners=False, mode='linear')  # (N, 768, L)
-            hidden_states = hidden_states.transpose(1, 2)  # (N, L, 768)
+            # Transpose for interpolation: (N, L, C) -> (N, C, L)
+            hidden_states = hidden_states.transpose(1, 2)
+            # Interpolate from 50 FPS to desired FPS
+            hidden_states = F.interpolate(hidden_states, size=total_frames, align_corners=False, mode='linear')
+            # Transpose back: (N, C, L) -> (N, L, C)
+            hidden_states = hidden_states.transpose(1, 2)
         
         # Convert to numpy array
         audio_features = hidden_states[0].cpu().numpy()
         
         return audio_features
         
-    def _extract_mfcc_features(self, audio_path, total_frames, n_mfcc=13):
+    def _extract_mfcc_features(self, audio_path, n_mfcc=13):
         """Extract MFCC features from the audio file."""
         logger.info(f"Extracting MFCC features from {audio_path}")
         
@@ -420,14 +423,16 @@ class ImageClusterGenerator:
         # Extract MFCC features
         mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft)
         
-        # Resample to match the number of frames
+        # Calculate number of frames based on audio duration
         audio_duration = len(audio) / sr
-        # total_frames = int(audio_duration * self.fps)
+        total_frames = int(audio_duration * self.fps)
+        
+        # Resample MFCC features to match the desired number of frames
         mfcc_resampled = librosa.resample(mfcc, orig_sr=mfcc.shape[1], target_sr=total_frames)
         
         return mfcc_resampled.T
         
-    def _extract_mel_features(self, audio_path, total_frames):
+    def _extract_mel_features(self, audio_path):
         """Extract Mel spectrogram features from the audio file."""
         logger.info(f"Extracting Mel spectrogram features from {audio_path}")
         
@@ -447,9 +452,11 @@ class ImageClusterGenerator:
         # Convert to log scale
         mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
         
-        # Resample to match the number of frames
+        # Calculate number of frames based on audio duration
         audio_duration = len(audio) / sr
-        # total_frames = int(audio_duration * self.fps)
+        total_frames = int(audio_duration * self.fps)
+        
+        # Resample Mel features to match the desired number of frames
         mel_spec_resampled = librosa.resample(mel_spec_db, orig_sr=mel_spec_db.shape[1], target_sr=total_frames)
         
         return mel_spec_resampled.T
@@ -539,17 +546,25 @@ class ImageClusterGenerator:
                         logger.warning(f"Could not find audio file for {video_path}, skipping audio feature extraction")
                         raise FileNotFoundError(f"Audio file not found for {video_path}")
                 
-                assert len(frame_indices) == len(cluster_ids), f"Frame indices length ({len(frame_indices)}) does not match cluster IDs length ({len(cluster_ids)}) for video {video_path}"
-                
                 # Extract audio features
-                audio_features = self.extract_audio_features(audio_path, len(frame_indices))
+                audio_features = self.extract_audio_features(audio_path)
+                if len(audio_features.shape) == 3:
+                    audio_features = audio_features[0]  # (seq_len, audio_feature_dim)
+                cluster_ids = cluster_ids[:len(audio_features)]  # Truncate cluster IDs to match audio features length
                 
-                # Verify that audio features length matches cluster IDs length
-                assert len(audio_features) == len(cluster_ids), f"Audio features length ({len(audio_features)}) does not match cluster IDs length ({len(cluster_ids)}) for video {video_path}"
+                # Handle sequence length mismatch by truncating the longer sequence
+                if len(audio_features) != len(cluster_ids):
+                    logger.warning(f"Audio features length ({len(audio_features)}) does not match cluster IDs length ({len(cluster_ids)}) for video {video_path}")
+                    # min_length = min(len(audio_features), len(cluster_ids))
+                    # audio_features = audio_features[:min_length]
+                    # frame_indices = frame_indices[:min_length]
+                    # cluster_ids = cluster_ids[:min_length]
+                    # logger.info(f"Truncated sequences to length {min_length}")
+                    raise ValueError(f"Audio features length ({len(audio_features)}) does not match cluster IDs length ({len(cluster_ids)}) for video {video_path}")
                 
                 # Store in dictionary
                 audio_features_dict[video_path] = audio_features.tolist()
-                logger.info(f"Successfully extracted audio features for {video_path}, shape: {audio_features.shape}")
+                # logger.info(f"Successfully extracted audio features for {video_path}, shape: {audio_features.shape}")
                 
                 # Add to sequences dictionary
                 sequences_dict[video_path] = {
@@ -811,7 +826,7 @@ def main():
     parser = argparse.ArgumentParser(description='Generate image clusters from videos')
     parser.add_argument('--video_pattern', type=str, required=True, help='Pattern to match video files')
     parser.add_argument('--output_dir', type=str, required=True, help='Directory to save results')
-    parser.add_argument('--n_clusters', type=int, default=100, help='Number of clusters to generate')
+    parser.add_argument('--n_clusters', type=int, default=10, help='Number of clusters to generate')
     parser.add_argument('--frame_interval', type=int, default=1, help='Interval between frames to extract')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use for computation')
     parser.add_argument('--model_name', type=str, default="ViT-B/32", help='CLIP model to use')

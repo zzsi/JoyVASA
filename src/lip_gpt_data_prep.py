@@ -98,7 +98,8 @@ def main():
     # python batch_inference.py
 
     ## Run clustering on the generated videos to get the clusters and lip tokens
-    # python -m src.generate_image_clusters --video_pattern "data/conversations_joyvasa_videos/bithuman_coach2/*_lip.mp4" --output_dir "data/conversations_joyvasa_videos/bithuman_coach2_image_clusters" --n_clusters 360 --max_frames 90000
+    # python -m src.generate_image_clusters --video_pattern "data/conversations_joyvasa_videos/bithuman_coach2/*_lip.mp4" --output_dir "data/conversations_joyvasa_videos/bithuman_coach2_image_clusters" --n_clusters 128 --max_frames 10000
+
     """
     These are test set (not used in training)
     2025-04-22 20:32:57,794 - INFO -   data/conversations_joyvasa_videos/bithuman_coach2/bithuman_coach_cropped2_fbc793678b9e6aee50fdbfe44cbb8a25334b96c8ab31219190087904b17ba267_tts-1_nova_lip.mp4
@@ -109,7 +110,7 @@ def main():
     """
 
     ## Run lip_gpt training pipeline to train a lip_gpt model
-    # python train_lip_gpt.py --config_path "configs/train_lip_gpt_config.yaml"
+    # python -m src.lip_gpt --model_arch direct --mode train
 
 if __name__ == "__main__":
     main()
