@@ -135,7 +135,7 @@ def detokenize(token_ids: list[int], cluster_data_dir: str, output_path: str = N
     
     # Get the first frame from any cluster to determine dimensions
     first_valid_frame = None
-    print(cluster_generator.cluster_to_frames)
+    # print(cluster_generator.cluster_to_frames)
     for cluster_id in range(cluster_generator.n_clusters):
         if cluster_id in cluster_generator.cluster_to_frames and cluster_generator.cluster_to_frames[cluster_id]:
             first_valid_frame = cluster_generator.cluster_to_frames[cluster_id][0][2]  # Get the frame array

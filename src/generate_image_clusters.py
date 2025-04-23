@@ -28,6 +28,19 @@ import librosa
 import soundfile as sf
 import subprocess
 import tempfile
+import platform
+from .config.base_config import make_abs_path
+
+# suppress warnings:
+# /workspace/src/generate_image_clusters.py:319: UserWarning: PySoundFile failed. Trying audioread instead.
+#   audio, sr = librosa.load(video_path, sr=16000)
+# /opt/conda/lib/python3.10/site-packages/librosa/core/audio.py:184: FutureWarning: librosa.core.audio.__audioread_load
+#         Deprecated as of librosa version 0.10.0.
+#         It will be removed in librosa version 1.0.
+#   y, sr_native = __audioread_load(path, offset, duration, dtype)
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="librosa")
+warnings.filterwarnings("ignore", category=UserWarning, module="librosa")
 
 # Set up logging
 logging.basicConfig(
@@ -37,26 +50,61 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class ImageClusterGenerator:
-    def __init__(self, device='cuda', n_clusters=100, model_name="ViT-B/32"):
-        """Initialize the image cluster generator with CLIP model and clustering parameters"""
-        self.device = device
+    def __init__(
+            self, output_dir=None, n_clusters=100, device="cuda",
+            model_name="ViT-B/32", audio_feature_type="hubert_zh",
+            clear_output_dir=False, frame_interval=1, max_frames=1000, fps=25
+        ):
+        self.output_dir = output_dir
         self.n_clusters = n_clusters
+        self.device = device
         self.model_name = model_name
+        self.audio_feature_type = audio_feature_type
+        self.frame_interval = frame_interval
+        self.max_frames = max_frames
+        self.fps = fps
         
-        logger.info(f"Initializing ImageClusterGenerator on device: {device}")
-        logger.info(f"Loading CLIP model: {model_name}")
+        # Only create output directories if output_dir is provided
+        if output_dir is not None:
+            # Clear output directory if requested
+            if clear_output_dir and os.path.exists(output_dir):
+                logger.info(f"Clearing output directory: {output_dir}")
+                import shutil
+                shutil.rmtree(output_dir)
+            
+            # Create output directories
+            os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(os.path.join(output_dir, "clusters"), exist_ok=True)
+            os.makedirs(os.path.join(output_dir, "embeddings"), exist_ok=True)
+            os.makedirs(os.path.join(output_dir, "audio_features"), exist_ok=True)
         
-        # Load CLIP model
+        # Initialize CLIP model
         self.model, self.preprocess = clip.load(model_name, device=device)
-        logger.info("CLIP model loaded successfully")
         
-        # Initialize clustering components
-        self.kmeans = None
-        self.cluster_centers = None
-        self.cluster_to_frames = {}  # Maps cluster ID to list of (video_path, frame_idx) tuples
+        # Initialize HuBERT model if needed
+        if audio_feature_type == "hubert_zh":
+            logger.info("Initializing HuBERT model for audio feature extraction")
+            from .modules.hubert import HubertModel
+            
+            # Define model path
+            model_path = '../../pretrained_weights/chinese-hubert-base'
+            if platform.system() == "Windows":
+                model_path = '../../pretrained_weights/chinese-hubert-base'
+            
+            # Load model
+            self.audio_encoder = HubertModel.from_pretrained(make_abs_path(model_path))
+            self.audio_encoder.feature_extractor._freeze_parameters()
+            self.audio_encoder = self.audio_encoder.to(device)
+        
+        # Initialize lists to store data
+        self.frame_paths = []
+        self.embeddings = []
+        self.audio_features = []
+        
+        # Initialize dictionaries for clustering
+        self.cluster_to_frames = {}  # Maps cluster ID to list of frames
         self.frame_to_cluster = {}   # Maps frame key to cluster ID
-        self.video_sequences = {}    # Maps video path to list of (frame_idx, cluster_id) tuples
-        self.audio_features = {}     # Maps video path to audio features array
+        self.video_sequences = {}    # Maps video path to sequence of (frame_idx, cluster_id) tuples
         
     def extract_image_embeddings(self, video_frames: List[Tuple[str, int, np.ndarray]], batch_size: int = 32) -> torch.Tensor:
         """Extract embeddings for a list of video frames using CLIP"""
@@ -181,10 +229,10 @@ class ImageClusterGenerator:
                 logger.warning(f"No valid frames for cluster {cluster_id}")
                 continue
             
-            # Create grid using torchvision
+            # Create grid using torchvision and flip RGB->BGR
             grid = torchvision.utils.make_grid(
-                tensor_images, 
-                nrow=min(grid_size, len(tensor_images)),
+                tensor_images,
+                nrow=min(grid_size, len(tensor_images)), 
                 padding=5,
                 normalize=False
             )
@@ -213,7 +261,8 @@ class ImageClusterGenerator:
                 
             # Get video name without extension
             video_name = os.path.basename(video_path).split('.')[0]
-            output_path = os.path.join(videos_dir, f"{video_name}_detokenized.mp4")
+            temp_output_path = os.path.join(videos_dir, f"{video_name}_detokenized_temp.mp4")
+            final_output_path = os.path.join(videos_dir, f"{video_name}_detokenized.mp4")
             
             # Get the first frame to determine dimensions
             first_valid_frame = None
@@ -242,12 +291,56 @@ class ImageClusterGenerator:
                 
                 frames.append(frame)
             
-            # Use images2video function to create the video
-            images2video(frames, wfp=output_path, fps=fps, image_mode='bgr')
-            # also save the frames as an image grid
+            # Use images2video function to create the video without audio first
+            images2video(frames, wfp=temp_output_path, fps=fps, image_mode='bgr')
+
+            # Extract audio from original video and add to detokenized video
+            try:
+                # The audio is in the original mp4 file
+                audio_path = video_path.replace("_temp.mp4", ".mp4")
+                
+                # Check if the audio file exists
+                if not os.path.exists(audio_path):
+                    logger.warning(f"Audio file not found at {audio_path}, trying alternative path")
+                    # Try alternative path construction
+                    base_name = os.path.basename(video_path)
+                    if "_temp" in base_name:
+                        alt_audio_path = video_path.replace("_temp", "")
+                    else:
+                        # Try to find the audio file in the same directory
+                        dir_name = os.path.dirname(video_path)
+                        base_name_no_ext = os.path.splitext(base_name)[0]
+                        alt_audio_path = os.path.join(dir_name, f"{base_name_no_ext}.mp4")
+                    
+                    if os.path.exists(alt_audio_path):
+                        audio_path = alt_audio_path
+                        logger.info(f"Using alternative audio path: {audio_path}")
+                    else:
+                        logger.warning(f"Could not find audio file for {video_path}, skipping audio")
+                        raise FileNotFoundError(f"Audio file not found for {video_path}")
+                
+                # Use ffmpeg to combine video and audio
+                cmd = [
+                    'ffmpeg', '-y',
+                    '-i', temp_output_path,  # Input video
+                    '-i', audio_path,        # Input audio
+                    '-c:v', 'copy',          # Copy video stream
+                    '-c:a', 'aac',           # Re-encode audio as AAC
+                    final_output_path        # Output file
+                ]
+                subprocess.run(cmd, check=True, capture_output=True)
+                
+                # Remove temporary video file
+                os.remove(temp_output_path)
+                
+                logger.info(f"Added audio to detokenized video: {final_output_path}")
+            except Exception as e:
+                logger.warning(f"Failed to add audio to video {video_path}: {e}")
+                # If audio addition fails, just rename temp file to final
+                os.rename(temp_output_path, final_output_path)
+            
+            # Save the frames as an image grid
             frames_torch = [torch.from_numpy(frame).permute(2, 0, 1) for frame in frames]
-            # print(frames_torch[0].shape, "this is the shape of each frame")
-            # resize to 64x64 for each frame
             frames_torch = [F.interpolate(frame.unsqueeze(0), size=(64, 64), mode='bilinear', align_corners=False).squeeze(0) for frame in frames_torch]
             frames_torch = frames_torch[:36]
             grid_image = torchvision.utils.make_grid(
@@ -256,10 +349,10 @@ class ImageClusterGenerator:
                 padding=5,
                 normalize=False
             )
-            # print("grid_image.shape", grid_image.shape)
+            grid_image = grid_image.flip(0)  # Flip RGB->BGR
             grid_image = torchvision.transforms.ToPILImage()(grid_image)
             grid_image.save(os.path.join(output_dir, f"{video_name}_detokenized_grid.png"))
-            logger.info(f"Generated detokenized video: {output_path}")
+            logger.info(f"Generated detokenized video: {final_output_path}")
 
             cnt += 1
             if cnt >= max_videos:
@@ -267,112 +360,99 @@ class ImageClusterGenerator:
         
         logger.info(f"All detokenized videos saved to {videos_dir}")
     
-    def extract_audio_features(self, video_path: str, frame_indices: List[int], fps: float, 
-                             feature_type: str = "mfcc", n_mfcc: int = 13) -> np.ndarray:
-        """
-        Extract audio features from a video file.
+    def extract_audio_features(self, audio_path, total_frames):
+        """Extract audio features from the audio file."""
+        if self.audio_feature_type == "hubert_zh":
+            return self._extract_hubert_zh_features(audio_path, total_frames)
+        elif self.audio_feature_type == "mfcc":
+            return self._extract_mfcc_features(audio_path, total_frames)
+        elif self.audio_feature_type == "mel":
+            return self._extract_mel_features(audio_path, total_frames)
+        else:
+            raise ValueError(f"Unsupported audio feature type: {self.audio_feature_type}")
+            
+    def _extract_hubert_zh_features(self, audio_path, total_frames):
+        """Extract HuBERT-ZH features from the audio file."""
+        logger.info(f"Extracting HuBERT-ZH features from {audio_path}")
         
-        Args:
-            video_path: Path to the video file
-            frame_indices: List of frame indices to extract features for
-            fps: Frames per second of the video
-            feature_type: Type of audio features to extract ('mfcc', 'mel', etc.)
-            n_mfcc: Number of MFCC coefficients to extract
-            
-        Returns:
-            Array of audio features, one per frame
-        """
-        logger.info(f"Extracting audio features from video: {video_path}")
+        # Load audio file
+        audio, sr = librosa.load(audio_path, sr=16000)
         
-        # Create a temporary file for the audio
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-            temp_audio_path = temp_audio.name
+        # Convert audio to tensor
+        audio_tensor = torch.from_numpy(audio).float().unsqueeze(0).to(self.device)
         
-        try:
-            # Extract audio from video using ffmpeg
-            # subprocess.run([
-            #     "ffmpeg", "-i", video_path, 
-            #     "-vn", "-acodec", "pcm_s16le", 
-            #     "-ar", "16000", "-ac", "1", 
-            #     "-y", temp_audio_path
-            # ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            
-            # Load audio file
-            # audio, sr = librosa.load(temp_audio_path, sr=16000)
-            audio, sr = librosa.load(video_path, sr=16000)
-            
-            # Calculate frame duration in seconds
-            frame_duration = 1.0 / fps
-            
-            # Calculate the minimum FFT size based on the shortest possible audio segment
-            # We want n_fft to be at most the length of the shortest audio segment
-            min_samples_per_frame = int(frame_duration * sr)
-            # Use the next power of 2 that's smaller than or equal to min_samples_per_frame
-            # or at least 32 samples (very small but still reasonable)
-            n_fft = max(32, 2 ** int(np.log2(min(min_samples_per_frame, 2048))))
-            logger.info(f"Using FFT size of {n_fft} for audio segments of approximately {min_samples_per_frame} samples")
-            
-            # Extract features for each frame
-            features = []
-            for frame_idx in frame_indices:
-                # Calculate start and end time for this frame
-                start_time = frame_idx * frame_duration
-                end_time = (frame_idx + 1) * frame_duration
-                
-                # Convert to sample indices
-                start_sample = int(start_time * sr)
-                end_sample = int(end_time * sr)
-                
-                # Ensure we don't go beyond the audio length
-                if start_sample >= len(audio):
-                    # If we're beyond the audio length, use the last frame's features
-                    if features:
-                        features.append(features[-1])
-                    else:
-                        # If this is the first frame and we're beyond the audio length,
-                        # create a zero feature vector
-                        if feature_type == "mfcc":
-                            features.append(np.zeros(n_mfcc))
-                        else:
-                            features.append(np.zeros(128))  # Default for mel spectrogram
-                    continue
-                
-                # Extract the audio segment for this frame
-                if end_sample > len(audio):
-                    end_sample = len(audio)
-                
-                frame_audio = audio[start_sample:end_sample]
-                
-                # Handle very short audio segments
-                if len(frame_audio) < n_fft:
-                    # If the audio segment is too short, pad it with zeros
-                    frame_audio = np.pad(frame_audio, (0, n_fft - len(frame_audio)))
-                
-                # Extract features
-                if feature_type == "mfcc":
-                    frame_features = librosa.feature.mfcc(y=frame_audio, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft)
-                    # Take the mean across time
-                    frame_features = np.mean(frame_features, axis=1)
-                elif feature_type == "mel":
-                    frame_features = librosa.feature.melspectrogram(y=frame_audio, sr=sr, n_fft=n_fft)
-                    # Convert to log scale
-                    frame_features = librosa.power_to_db(frame_features, ref=np.max)
-                    # Take the mean across time
-                    frame_features = np.mean(frame_features, axis=1)
-                else:
-                    raise ValueError(f"Unsupported feature type: {feature_type}")
-                
-                features.append(frame_features)
-            
-            # Verify that audio features length matches frame indices length
-            assert len(features) == len(frame_indices), f"Audio features length ({len(features)}) does not match frame indices length ({len(frame_indices)}) for video {video_path}"
-            
-            return np.array(features)
-            
-        finally:
-            # Clean up temporary file
-            if os.path.exists(temp_audio_path):
-                os.unlink(temp_audio_path)
+        # Define padding function
+        def pad_audio(audio):
+            return F.pad(audio, (1280, 640), "constant", 0)
+        
+        # Extract features
+        # Calculate the number of frames based on audio length and FPS
+        audio_duration = len(audio) / sr
+        total_frames_based_on_audio_duration = int(audio_duration * self.fps)
+        logger.info(f"Comparing total frames based on audio duration: {total_frames_based_on_audio_duration} with total frames: {total_frames}")
+        
+        # Extract features using the encoder
+        with torch.no_grad():
+            hidden_states = self.audio_encoder(pad_audio(audio_tensor), self.fps, frame_num=total_frames * 2).last_hidden_state
+            hidden_states = hidden_states.transpose(1, 2)  # (N, 768, 2L)
+            hidden_states = F.interpolate(hidden_states, size=total_frames, align_corners=False, mode='linear')  # (N, 768, L)
+            hidden_states = hidden_states.transpose(1, 2)  # (N, L, 768)
+        
+        # Convert to numpy array
+        audio_features = hidden_states[0].cpu().numpy()
+        
+        return audio_features
+        
+    def _extract_mfcc_features(self, audio_path, total_frames, n_mfcc=13):
+        """Extract MFCC features from the audio file."""
+        logger.info(f"Extracting MFCC features from {audio_path}")
+        
+        # Load audio file
+        audio, sr = librosa.load(audio_path, sr=16000)
+        
+        # Calculate frame duration in seconds
+        frame_duration = 1.0 / self.fps
+        
+        # Calculate the minimum FFT size based on the shortest possible audio segment
+        min_samples_per_frame = int(frame_duration * sr)
+        n_fft = max(32, 2 ** int(np.log2(min(min_samples_per_frame, 2048))))
+        
+        # Extract MFCC features
+        mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft)
+        
+        # Resample to match the number of frames
+        audio_duration = len(audio) / sr
+        # total_frames = int(audio_duration * self.fps)
+        mfcc_resampled = librosa.resample(mfcc, orig_sr=mfcc.shape[1], target_sr=total_frames)
+        
+        return mfcc_resampled.T
+        
+    def _extract_mel_features(self, audio_path, total_frames):
+        """Extract Mel spectrogram features from the audio file."""
+        logger.info(f"Extracting Mel spectrogram features from {audio_path}")
+        
+        # Load audio file
+        audio, sr = librosa.load(audio_path, sr=16000)
+        
+        # Calculate frame duration in seconds
+        frame_duration = 1.0 / self.fps
+        
+        # Calculate the minimum FFT size based on the shortest possible audio segment
+        min_samples_per_frame = int(frame_duration * sr)
+        n_fft = max(32, 2 ** int(np.log2(min(min_samples_per_frame, 2048))))
+        
+        # Extract Mel spectrogram features
+        mel_spec = librosa.feature.melspectrogram(y=audio, sr=sr, n_fft=n_fft)
+        
+        # Convert to log scale
+        mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
+        
+        # Resample to match the number of frames
+        audio_duration = len(audio) / sr
+        # total_frames = int(audio_duration * self.fps)
+        mel_spec_resampled = librosa.resample(mel_spec_db, orig_sr=mel_spec_db.shape[1], target_sr=total_frames)
+        
+        return mel_spec_resampled.T
     
     def save_cluster_data(self, output_dir: str):
         """Save cluster centers and video sequences to files"""
@@ -416,6 +496,7 @@ class ImageClusterGenerator:
         
         # Prepare video sequences data
         video_paths = list(self.video_sequences.keys())
+        logger.info(f"Processing {len(video_paths)} video sequences")
         
         # Create a dictionary to store sequences
         sequences_dict = {}
@@ -430,20 +511,45 @@ class ImageClusterGenerator:
             try:
                 # Get video FPS
                 cap = cv2.VideoCapture(video_path)
-                fps = cap.get(cv2.CAP_PROP_FPS)
+                fps = cap.get(cv2.CAP_PROP_FPS)  # TODO: this is not used anywhere
                 cap.release()
                 
                 # Extract audio features
                 # The audio is actually in a differnet mp4.. 
                 audio_path = video_path.replace("_temp.mp4", ".mp4")
+                logger.info(f"Extracting audio features from {audio_path}")
+                
+                # Check if the audio file exists
+                if not os.path.exists(audio_path):
+                    logger.warning(f"Audio file not found at {audio_path}, trying alternative path")
+                    # Try alternative path construction
+                    base_name = os.path.basename(video_path)
+                    if "_temp" in base_name:
+                        alt_audio_path = video_path.replace("_temp", "")
+                    else:
+                        # Try to find the audio file in the same directory
+                        dir_name = os.path.dirname(video_path)
+                        base_name_no_ext = os.path.splitext(base_name)[0]
+                        alt_audio_path = os.path.join(dir_name, f"{base_name_no_ext}.mp4")
+                    
+                    if os.path.exists(alt_audio_path):
+                        audio_path = alt_audio_path
+                        logger.info(f"Using alternative audio path: {audio_path}")
+                    else:
+                        logger.warning(f"Could not find audio file for {video_path}, skipping audio feature extraction")
+                        raise FileNotFoundError(f"Audio file not found for {video_path}")
+                
                 assert len(frame_indices) == len(cluster_ids), f"Frame indices length ({len(frame_indices)}) does not match cluster IDs length ({len(cluster_ids)}) for video {video_path}"
-                audio_features = self.extract_audio_features(audio_path, frame_indices, fps)
+                
+                # Extract audio features
+                audio_features = self.extract_audio_features(audio_path, len(frame_indices))
                 
                 # Verify that audio features length matches cluster IDs length
                 assert len(audio_features) == len(cluster_ids), f"Audio features length ({len(audio_features)}) does not match cluster IDs length ({len(cluster_ids)}) for video {video_path}"
                 
                 # Store in dictionary
                 audio_features_dict[video_path] = audio_features.tolist()
+                logger.info(f"Successfully extracted audio features for {video_path}, shape: {audio_features.shape}")
                 
                 # Add to sequences dictionary
                 sequences_dict[video_path] = {
@@ -452,6 +558,7 @@ class ImageClusterGenerator:
                 }
             except Exception as e:
                 logger.warning(f"Failed to extract audio features for {video_path}: {e}")
+                raise
                 # Still save the visual sequence even if audio extraction fails
                 sequences_dict[video_path] = {
                     "frame_indices": frame_indices,
@@ -470,12 +577,24 @@ class ImageClusterGenerator:
             audio_features_path = os.path.join(output_dir, "audio_features.npy")
             np.save(audio_features_path, audio_features_dict)
             logger.info(f"Saved audio features for {len(audio_features_dict)} videos to {audio_features_path}")
+        else:
+            logger.warning("No audio features were extracted, so audio_features.npy was not created")
         
         # Save metadata
         metadata = {
             "n_clusters": int(self.n_clusters),
             "model_name": self.model_name,
-            "video_paths": video_paths
+            "video_paths": video_paths,
+            "audio_feature_type": self.audio_feature_type,
+            "audio_feature_dim": 768 if self.audio_feature_type == "hubert_zh" else (13 if self.audio_feature_type == "mfcc" else 128),  # MFCC uses 13 coefficients, Mel uses 128 bins
+            "device": self.device,
+            "frame_interval": self.frame_interval,
+            "max_frames": self.max_frames,
+            "fps": self.fps,  # Default FPS used for audio feature extraction
+            "audio_sampling_rate": 16000,  # Default sampling rate for audio processing
+            "cluster_algorithm": "kmeans",
+            "embedding_model": "CLIP",
+            "embedding_dim": 512  # CLIP embedding dimension
         }
         
         metadata_path = os.path.join(output_dir, "metadata.json")
@@ -560,6 +679,34 @@ class ImageClusterGenerator:
         
         return nearest_cluster
 
+    @classmethod
+    def from_pretrained(cls, model_dir, device="cuda"):
+        """Load a pretrained ImageClusterGenerator from a directory."""
+        # Load metadata to get parameters
+        metadata_path = os.path.join(model_dir, "metadata.json")
+        if not os.path.exists(metadata_path):
+            raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
+            
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        
+        # Create instance with parameters from metadata
+        instance = cls(
+            output_dir=None,  # Don't create output directories when loading
+            n_clusters=metadata["n_clusters"],
+            device=device,
+            model_name=metadata["model_name"],
+            audio_feature_type=metadata["audio_feature_type"],
+            frame_interval=metadata["frame_interval"],
+            max_frames=metadata["max_frames"],
+            fps=metadata["fps"]
+        )
+        
+        # Load cluster data
+        instance.load_cluster_data(model_dir)
+        
+        return instance
+
 def extract_frames_from_video(video_path: str, frame_interval: int = 1, verbose: bool = False) -> List[Tuple[str, int, np.ndarray]]:
     """Extract frames from a video file and return them as numpy arrays"""
     # logger.info(f"Extracting frames from video: {video_path}")
@@ -594,8 +741,8 @@ def extract_frames_from_video(video_path: str, frame_interval: int = 1, verbose:
     return frames
 
 def process_videos(video_pattern: str, output_dir: str, n_clusters: int = 100, 
-                  frame_interval: int = 5, device: str = 'cuda', model_name: str = "ViT-B/32",
-                  max_frames: int = 1000):
+                  frame_interval: int = 1, device: str = 'cuda', model_name: str = "ViT-B/32",
+                  max_frames: int = 1000, audio_feature_type: str = "hubert_zh", clear_output_dir: bool = False, fps: int = 25):
     """Process videos matching the pattern and generate clusters"""
     # Find all videos matching the pattern
     video_paths = glob.glob(video_pattern)
@@ -604,6 +751,7 @@ def process_videos(video_pattern: str, output_dir: str, n_clusters: int = 100,
         return
     
     logger.info(f"Found {len(video_paths)} videos to process")
+    video_paths = list(sorted(video_paths))
     
     # Create output directory for clusters
     clusters_dir = os.path.join(output_dir, "clusters")
@@ -622,12 +770,27 @@ def process_videos(video_pattern: str, output_dir: str, n_clusters: int = 100,
         # Check if we've reached the maximum number of frames
         if len(all_frames) >= max_frames:
             logger.info(f"Reached maximum frame limit ({max_frames}). Stopping extraction.")
+            # Print the remaining videos that would be excluded
+            remaining_videos = video_paths[video_paths.index(video_path)+1:]
+            logger.info(f"The following {len(remaining_videos)} videos would be excluded due to max_frames limit:")
+            for excluded_video in remaining_videos:
+                logger.info(f"  {excluded_video}")
             break
     
     logger.info(f"Extracted {len(all_frames)} frames in total")
     
     # Initialize cluster generator
-    cluster_generator = ImageClusterGenerator(device=device, n_clusters=n_clusters, model_name=model_name)
+    cluster_generator = ImageClusterGenerator(
+        output_dir=output_dir, 
+        n_clusters=n_clusters, 
+        device=device, 
+        model_name=model_name, 
+        audio_feature_type=audio_feature_type, 
+        clear_output_dir=clear_output_dir,
+        frame_interval=frame_interval,
+        max_frames=max_frames,
+        fps=fps
+    )
     
     # Extract embeddings and cluster images
     embeddings = cluster_generator.extract_image_embeddings(all_frames)
@@ -645,20 +808,28 @@ def process_videos(video_pattern: str, output_dir: str, n_clusters: int = 100,
     return cluster_generator
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate image clusters from videos")
-    parser.add_argument("--video_pattern", type=str, required=False, help="Glob pattern for video files",
-                        default="data/batch_generated_videos/bithuman_coach/*_temp.mp4")
-    parser.add_argument("--output_dir", type=str, required=False, help="Output directory for results",
-                        default="data/batch_generated_videos/bithuman_coach_image_clusters")
-    parser.add_argument("--n_clusters", type=int, default=128, help="Number of clusters")
-    parser.add_argument("--frame_interval", type=int, default=1, help="Extract every Nth frame")
-    parser.add_argument("--device", type=str, default="cuda", help="Device to run on (cuda/cpu)")
-    parser.add_argument("--model_name", type=str, default="ViT-B/32", help="CLIP model name")
-    parser.add_argument("--max_frames", type=int, default=90000, help="Maximum number of frames to process")
+    parser = argparse.ArgumentParser(description='Generate image clusters from videos')
+    parser.add_argument('--video_pattern', type=str, required=True, help='Pattern to match video files')
+    parser.add_argument('--output_dir', type=str, required=True, help='Directory to save results')
+    parser.add_argument('--n_clusters', type=int, default=100, help='Number of clusters to generate')
+    parser.add_argument('--frame_interval', type=int, default=1, help='Interval between frames to extract')
+    parser.add_argument('--device', type=str, default='cuda', help='Device to use for computation')
+    parser.add_argument('--model_name', type=str, default="ViT-B/32", help='CLIP model to use')
+    parser.add_argument('--max_frames', type=int, default=1000, help='Maximum number of frames to process')
+    parser.add_argument('--audio_feature_type', type=str, default="hubert_zh", 
+                        choices=["hubert_zh", "mfcc", "mel"], 
+                        help='Type of audio features to extract (default: hubert_zh)')
+    parser.add_argument('--clear_output_dir', action='store_true', 
+                        help='Clear the output directory before processing')
+    parser.add_argument('--fps', type=int, default=25,
+                        help='Frames per second for audio feature extraction (default: 25)')
     
     args = parser.parse_args()
     
-    # Process videos and generate clusters
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Process videos
     process_videos(
         video_pattern=args.video_pattern,
         output_dir=args.output_dir,
@@ -666,7 +837,10 @@ def main():
         frame_interval=args.frame_interval,
         device=args.device,
         model_name=args.model_name,
-        max_frames=args.max_frames
+        max_frames=args.max_frames,
+        audio_feature_type=args.audio_feature_type,
+        clear_output_dir=args.clear_output_dir,
+        fps=args.fps
     )
 
 if __name__ == "__main__":

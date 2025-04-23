@@ -169,6 +169,7 @@ if __name__ == "__main__":
         audio_dir=audio_dir,
         output_dir=output_dir,
         animation_mode="lip"  # or "animal" or "human"
+        # animation_mode="human"
     )
     
     print(f"\nSuccessfully processed {len(successful_outputs)} files:")
