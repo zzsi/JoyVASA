@@ -72,26 +72,29 @@ def generate_audio_from_a_sentence(sentence, model: str = "tts-1", voice: str = 
     """
     Generate audio from a sentence.
     """
+    if output_path and os.path.exists(output_path) and not overwrite:
+        print(f"Skipping {output_path} because it already exists")
+        return None
+        
     tts = OpenAITTS(model, voice)
     audio = tts.generate_audio(sentence)
+    
     if output_path:
-        if os.path.exists(output_path) and not overwrite:
-            print(f"Skipping {output_path} because it already exists")
-            return
         print(f"Saving audio to {output_path}")
         with open(output_path, "wb") as f:
             f.write(audio)
+            
     return audio
 
 
 def main():
     ## Uncomment this to generate audio from natural conversation examples
-    # model = "tts-1"
-    # voice = "nova"
-    # for sentence in sentences_from_examples():
-    #     print(f"Generating audio for: {sentence}")
-    #     audio_id = f"{hash_sentence(sentence)}_{model}_{voice}"
-    #     generate_audio_from_a_sentence(sentence, model, voice, f"data/conversations/{audio_id}.wav")
+    model = "tts-1"
+    voice = "nova"
+    for sentence in sentences_from_examples():
+        print(f"Generating audio for: {sentence}")
+        audio_id = f"{hash_sentence(sentence)}_{model}_{voice}"
+        generate_audio_from_a_sentence(sentence, model, voice, f"data/conversations/{audio_id}.wav")
 
     ## Run batch inference to generate the lip-synced videos
     # Edit batch_inference.py, inference_config.py and argument_config.py. Run the following command to generate the lip-synced videos:
@@ -99,6 +102,8 @@ def main():
 
     ## Run clustering on the generated videos to get the clusters and lip tokens
     # python -m src.generate_image_clusters --video_pattern "data/conversations_joyvasa_videos/bithuman_coach2/*_lip.mp4" --output_dir "data/conversations_joyvasa_videos/bithuman_coach2_image_clusters" --n_clusters 128 --max_frames 10000
+
+    ## Run an audio encoder to extract the audio features and prepare training data: visual id sequence, paired with audio features
 
     """
     These are test set (not used in training)

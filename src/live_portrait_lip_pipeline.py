@@ -38,6 +38,11 @@ class LivePortraitLipPipeline(object):
         inf_cfg = self.live_portrait_wrapper.inference_cfg
         device = self.live_portrait_wrapper.device
         crop_cfg = self.cropper.crop_cfg
+        final_video = osp.join(args.output_dir, f'{basename(args.reference)}_{basename(args.audio)}_lip.mp4')
+        features_path = osp.join(args.output_dir, f'{basename(args.reference)}_{basename(args.audio)}_lip_features.pkl')
+        if not args.overwrite and os.path.exists(final_video):
+            log(f"Skipping {final_video} because it already exists")
+            return final_video, features_path
 
         ######## load reference image ########
         if is_image(args.reference):
@@ -182,11 +187,10 @@ class LivePortraitLipPipeline(object):
             images2video(I_p_pstbk_lst, wfp=temp_video, fps=inf_cfg.output_fps)
         else:
             images2video(I_p_lst, wfp=temp_video, fps=inf_cfg.output_fps)
-        final_video = osp.join(args.output_dir, f'{basename(args.reference)}_{basename(args.audio)}_lip.mp4')
+        
         add_audio_to_video(temp_video, args.audio, final_video, remove_temp=True)
 
         # Save lip features
-        features_path = osp.join(args.output_dir, f'{basename(args.reference)}_{basename(args.audio)}_lip_features.pkl')
         with open(features_path, 'wb') as f:
             pickle.dump({
                 'fps': inf_cfg.output_fps,

@@ -1,6 +1,7 @@
 docker run --rm --runtime nvidia \
     --gpus all \
     --shm-size=16G \
+    -e WANDB_API_KEY=$WANDB_API_KEY \
     -v $(pwd):/workspace \
     -it joyvasa \
     bash

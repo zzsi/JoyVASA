@@ -15,7 +15,7 @@ from tqdm import tqdm
 import logging
 import os
 from .modules.wav2vec2 import Wav2Vec2Model
-
+from src.utils.video import add_audio_to_video
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -368,12 +368,14 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--mode", type=str, default="generate", choices=["train", "generate"])
     parser.add_argument("--model_path", type=str, default="fast_lipsync_dating_coach.pth", help="Path to the model file")
-    parser.add_argument("--train_dir", type=str, default="data/batch_generated_videos/bithuman_coach", help="Path to the directory containing audio and video files for training")
+    # parser.add_argument("--train_dir", type=str, default="data/batch_generated_videos/bithuman_coach", help="Path to the directory containing audio and video files for training")
+    parser.add_argument("--train_dir", type=str, default="data/conversations_joyvasa_videos/bithuman_coach2", help="Path to the directory containing audio and video files for training")
     parser.add_argument("--train_audio_path", type=str, default="data/raw-video.wav", help="Path to the audio file for training")
     parser.add_argument("--train_video_path", type=str, default="animations/joyvasa_005_raw-video_lip_temp.mp4", help="Path to the video file for training")
     parser.add_argument("--n_clusters", type=int, default=1000, help="Number of clusters for clustering")
-    parser.add_argument("--input_audio_path", type=str, required=False, help="Path to the input audio file for generation", default="assets/examples/audios/joyvasa_001.wav")
-    parser.add_argument("--output_path", type=str, help="Path to the output video file", default=None)
+    # parser.add_argument("--input_audio_path", type=str, required=False, help="Path to the input audio file for generation", default="assets/examples/audios/joyvasa_001.wav")
+    parser.add_argument("--input_audio_path", type=str, required=False, help="Path to the input audio file for generation", default="data/conversations/002e4b0241534fc6f83d62452488bf1c7c05bc2ba69d840947a41d9a4727ae55_tts-1_nova.wav")
+    parser.add_argument("--output_path", type=str, help="Path to the output video file", default="data/tmp.mp4")
     parser.add_argument("--fps", type=int, default=25, help="FPS of the output video for generation")
     parser.add_argument("--device", type=str, default="cpu", help="Device to run on (cpu/cuda)")
     parser.add_argument("--use_beam_search", action="store_true", help="Use beam search for temporal smoothing")
@@ -401,9 +403,9 @@ if __name__ == "__main__":
         if args.train_dir:
             import glob
 
-            wildcard = os.path.join(args.train_dir, "*_temp.mp4")
+            wildcard = os.path.join(args.train_dir, "*_lip.mp4")
             logger.info(f"Training with multiple videos in directory: {wildcard}")
-            video_mp4_paths = list(glob.glob(wildcard))[:2000]
+            video_mp4_paths = list(glob.glob(wildcard))[:1000]
             audio_paths = [x.replace("_temp.mp4", ".mp4") for x in video_mp4_paths]
             assert len(video_mp4_paths) > 0, f"No video files found in the training directory: {wildcard}"
             assert len(audio_paths) > 0, f"No audio files found in the training directory: {wildcard}"
@@ -434,4 +436,10 @@ if __name__ == "__main__":
             frames = fast_lipsync.generate(audio_path=args.input_audio_path)
             
         fast_lipsync.save_video(frames=frames, output_path=args.output_path)
+        # add audio to the video
+        add_audio_to_video(
+            silent_video_path=args.output_path,
+            audio_video_path=args.input_audio_path,
+            output_video_path=args.output_path.replace(".mp4", "_with_audio.mp4")
+        )
 

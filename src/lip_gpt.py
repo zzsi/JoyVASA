@@ -19,6 +19,30 @@ import torch.nn as nn
 import torch.nn.functional as F
 from contextlib import nullcontext
 from src.lip_gpt0 import GPT, GPTConfig, NanoGPTTrainingPipeline, load_video_cluster_id_sequences
+from tqdm import tqdm
+from glob import glob
+
+
+
+def load_audio_visual_token_data(data_dir: str, max_files: int = None):
+    """
+    Load audio-to-visual token data.
+    """
+    npy_files = glob(os.path.join(data_dir, "*.npz"))
+    assert len(npy_files) > 0, f"No npy files found in {data_dir}"
+    audio_visual_token_data = []
+    if max_files is not None:
+        npy_files = npy_files[:max_files]
+    for npy_file in tqdm(npy_files):
+        loaded = np.load(npy_file, allow_pickle=True)
+        audio_features = loaded["audio_features"]
+        visual_tokens = loaded["visual_cluster_ids"]
+        assert len(audio_features.shape) == 3
+        # truncate visual tokens to the same length as audio features
+        visual_tokens = visual_tokens[:audio_features.shape[1]]
+        audio_visual_token_data.append((audio_features, visual_tokens))
+    return audio_visual_token_data
+
 
 @dataclass
 class AudioGPTConfig(GPTConfig):
@@ -59,7 +83,11 @@ class ConditionalGPT(GPT):
         super().__init__(config)
         self.audio_projection = AudioProjection(config)
         # Add a projection layer to reduce concatenated embeddings back to n_embd
-        self.combined_projection = nn.Linear(2 * config.n_embd, config.n_embd)
+        self.combined_projection = nn.Sequential(
+            nn.Linear(config.n_embd + config.audio_proj_dim, config.n_embd),
+            nn.ReLU(),
+            nn.Linear(config.n_embd, config.n_embd)
+        )
         # Add a direct audio-to-visual projection for simplified mode
         self.direct_audio_projection = nn.Sequential(
             nn.Linear(config.audio_proj_dim, config.audio_proj_dim),
@@ -94,8 +122,11 @@ class ConditionalGPT(GPT):
             # Full GPT functionality
             pos = torch.arange(0, t, dtype=torch.long, device=device)
             tok_emb = self.transformer.wte(visual_ids)
-            audio_emb = self.audio_projection(audio_features)
-            combined_emb = self.combined_projection(torch.cat([audio_emb, tok_emb], dim=-1))
+            if self.config.audio_proj_dim > 0:
+                audio_emb = self.audio_projection(audio_features)
+                combined_emb = self.combined_projection(torch.cat([audio_emb, tok_emb], dim=-1))
+            else:
+                combined_emb = tok_emb
             pos_emb = self.transformer.wpe(pos)
             x = self.transformer.drop(combined_emb + pos_emb)
             for block in self.transformer.h:
@@ -127,7 +158,6 @@ class ConditionalGPT(GPT):
             mode: str, "gpt" or "direct"
         """
         max_new_tokens = audio_features.shape[1]
-        print(f"  max_new_tokens: {max_new_tokens}")
         if mode == "direct":
             for i in range(max_new_tokens):
                 # Get current audio frame
@@ -182,37 +212,72 @@ class ConditionalGPT(GPT):
 
 class AudioVisualDatasetBuilder:
     """Handles loading and preprocessing of aligned audio-visual data."""
-    def __init__(self, json_path: str, audio_features_path: str, max_sequence_length: int = 80, start_token: int = 767):
-        with open(json_path, "r") as f:
-            self.video_cluster_id_sequences = json.load(f)
-        # Allow pickle=True to load object arrays
-        self.audio_features = np.load(audio_features_path, allow_pickle=True).item()  # Should be aligned with video sequences
+    def __init__(self, json_path: str = None, audio_features_path: str = None, data_dir: str = None, 
+                 max_sequence_length: int = 80, start_token: int = 767, max_files: int = None):
+        """
+        Initialize the dataset builder.
+        
+        Args:
+            json_path: Path to JSON file containing video cluster ID sequences
+            audio_features_path: Path to numpy file containing audio features
+            data_dir: Directory containing numpy files with audio-visual token data
+            max_sequence_length: Maximum length of sequences to process
+            start_token: Token to use at the start of sequences
+            max_files: Maximum number of files to process
+        """
+        if data_dir is not None:
+            # Load data from numpy files
+            audio_visual_token_data = load_audio_visual_token_data(data_dir, max_files)
+            self.video_cluster_id_sequences = [data[1] for data in audio_visual_token_data]  # visual tokens
+            self.audio_features = [data[0] for data in audio_visual_token_data]  # audio features
+            if len(self.audio_features[0].shape) == 3:
+                self.audio_features = [audio_features[0] for audio_features in self.audio_features]
+        else:
+            # Load data from JSON and numpy files
+            assert json_path is not None and audio_features_path is not None, \
+                "Both json_path and audio_features_path must be provided when data_dir is not specified"
+            with open(json_path, "r") as f:
+                self.video_cluster_id_sequences = json.load(f)
+            # Allow pickle=True to load object arrays
+            self.audio_features = np.load(audio_features_path, allow_pickle=True).item()  # Should be aligned with video sequences
+
         self.max_sequence_length = max_sequence_length
         self.start_token = start_token
-        
+        self.max_files = max_files
+
         # Convert audio_features dict to a list aligned with video_cluster_id_sequences
         # Process video sequences and audio features to ensure alignment
         audio_features_list = []
         visual_sequences_list = []
         
-        for video_path, video_data in self.video_cluster_id_sequences.items():
-            if video_path in self.audio_features:
-                # Extract the cluster IDs from the video data
-                visual_seq = video_data["cluster_ids"]
-                audio_seq = self.audio_features[video_path]
-                
-                # Check if lengths match before adding
-                if len(visual_seq) == len(audio_seq):
-                    visual_sequences_list.append(visual_seq)
-                    audio_features_list.append(audio_seq)
+        if data_dir is None:
+            # Process data from JSON and numpy files
+            for video_path, video_data in self.video_cluster_id_sequences.items():
+                if video_path in self.audio_features:
+                    # Extract the cluster IDs from the video data
+                    visual_seq = video_data["cluster_ids"]
+                    audio_seq = self.audio_features[video_path]
+                    
+                    # Check if lengths match before adding
+                    if len(visual_seq) == len(audio_seq):
+                        visual_sequences_list.append(visual_seq)
+                        audio_features_list.append(audio_seq)
+                    else:
+                        print(f"Warning: Skipping {video_path} - Visual sequence length ({len(visual_seq)}) does not match audio sequence length ({len(audio_seq)})")
                 else:
-                    print(f"Warning: Skipping {video_path} - Visual sequence length ({len(visual_seq)}) does not match audio sequence length ({len(audio_seq)})")
-            else:
-                print(f"Warning: Skipping {video_path} - Missing audio features")
-        
-        # Replace the original data with the aligned lists
-        self.video_cluster_id_sequences = visual_sequences_list
-        self.audio_features = audio_features_list
+                    print(f"Warning: Skipping {video_path} - Missing audio features")
+            
+            # Replace the original data with the aligned lists
+            self.video_cluster_id_sequences = visual_sequences_list
+            self.audio_features = audio_features_list
+        else:
+            # Data is already in the correct format from numpy files
+            visual_sequences_list = self.video_cluster_id_sequences
+            audio_features_list = self.audio_features
+
+        # Apply max_files limit
+        self.video_cluster_id_sequences = self.video_cluster_id_sequences[:self.max_files]
+        self.audio_features = self.audio_features[:self.max_files]
         
         # Verify that we have data to work with
         assert len(self.video_cluster_id_sequences) > 0, "No valid aligned audio-visual sequences found"
@@ -224,7 +289,7 @@ class AudioVisualDatasetBuilder:
         for i, (visual_seq, audio_seq) in enumerate(zip(self.video_cluster_id_sequences, self.audio_features)):
             # Verify that each audio sequence has the same length as its corresponding visual sequence
             assert len(visual_seq) == len(audio_seq), \
-                f"Sequence {i}: Visual sequence length ({len(visual_seq)}) does not match audio sequence length ({len(audio_seq)})"
+                f"Sequence {i}: Visual sequence length ({len(visual_seq)}) does not match audio sequence length ({len(audio_seq)})."
             
             if len(visual_seq) == self.max_sequence_length:
                 equalized_visual_sequences.append(visual_seq)
@@ -239,7 +304,7 @@ class AudioVisualDatasetBuilder:
                         equalized_visual_sequences.append(visual_chunk)
                         equalized_audio_sequences.append(audio_chunk)
             else:
-                print(f"Warning: Skipping {video_path} - Visual sequence length ({len(visual_seq)}) is less than max sequence length ({self.max_sequence_length})")
+                print(f"Warning: Skipping sequence {i} - Visual sequence length ({len(visual_seq)}) is less than max sequence length ({self.max_sequence_length})")
             
         print(f"There are {len(equalized_visual_sequences)} sequences in the dataset after equalization")
         
@@ -279,6 +344,14 @@ class AudioVisualDatasetBuilder:
         print(f"Training dataset shapes: visual {self.train_video_cluster_id_sequences.shape}, audio {self.train_audio_sequences.shape}")
         print(f"Validation dataset shapes: visual {self.val_video_cluster_id_sequences.shape}, audio {self.val_audio_sequences.shape}")
 
+    def num_training_frames(self):
+        """Returns the number of training frames."""
+        return self.train_audio_sequences.shape[1] * self.train_audio_sequences.shape[0]
+
+    def num_validation_frames(self):
+        """Returns the number of validation frames."""
+        return self.val_audio_sequences.shape[1] * self.val_audio_sequences.shape[0]
+
     def training_dataset(self):
         """Returns a tuple of (visual_sequences, audio_sequences) for training."""
         return self.train_video_cluster_id_sequences, self.train_audio_sequences
@@ -296,7 +369,10 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
         audio_feature_dim: int = 13
         audio_proj_dim: int = 36
         model_arch: str = "gpt"  # Add model_arch with default value
-        
+        max_files: int = None
+        data_dir: str = None
+        num_training_tokens: int = None
+
     def create_model(self):
         """Create the conditional GPT model."""
         config = self.config
@@ -497,6 +573,9 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
         local_iter_num = 0  # number of iterations in the lifetime of this process
         raw_model = model.module if ddp else model  # unwrap DDP container if needed
         running_mfu = -1.0
+        # if wandb_log:
+        #     import wandb
+        #     wandb.init(project="lip_gpt", config=self.config.__dict__)
         while True:
             # determine and set the learning rate for this iteration
             lr = self.get_lr(iter_num) if decay_lr else learning_rate
@@ -510,6 +589,7 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
                     f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
                 )
                 if wandb_log:
+                    import wandb
                     wandb.log(
                         {
                             "iter": iter_num,
@@ -764,7 +844,7 @@ def run_inference(args):
         
         # Detokenize and save the generated sequence
         detokenize(
-            token_ids=y[0].tolist(),
+            token_ids=y[0].tolist()[1:],
             cluster_data_dir=args.cluster_data_dir,
             output_path=os.path.join(args.output_dir, output_filename),
             fps=args.fps,
@@ -816,12 +896,14 @@ def main():
                         help="Model architecture to use: gpt (full transformer) or direct (simple audio-to-visual)")
     parser.add_argument("--ckpt_path", type=str, 
                         # default="data/gpt_logs/conditional_generation/batch128_block3/ckpt.pt",
-                        default="data/gpt_logs/conditional_generation/gpt/batch128_block3/ckpt.pt",
+                        default="data/gpt_logs/conditional_generation/gpt/batch128_block1/ckpt.pt",
                         help="Path to the checkpoint file for inference")
     parser.add_argument("--device", type=str, default="cuda", 
                         help="Device to run the model on: cuda or cpu")
-    parser.add_argument("--start_token", type=int, default=767,
+    parser.add_argument("--start_token", type=int, default=50,
                         help="Starting token for generation")
+    parser.add_argument("--vocab_size", type=int, default=51,
+                        help="Vocabulary size for the model")
     parser.add_argument("--max_new_tokens", type=int, default=128,
                         help="Maximum number of new tokens to generate")
     parser.add_argument("--num_samples", type=int, default=2,
@@ -833,15 +915,16 @@ def main():
     parser.add_argument("--audio_file", type=str,
                         # default="data/conversations/0b69c3d770680d2966d07a2c85ca35a8529e03b943c4e0350f0e6e0a00fc3ad3_tts-1_nova.wav",
                         # default="data/conversations/0d25f2d1de2e0805f932a817fd254c3113443f65409612dfbd64d23c93fd6d68_tts-1_nova.wav",
-                        # default="data/conversations/002e4b0241534fc6f83d62452488bf1c7c05bc2ba69d840947a41d9a4727ae55_tts-1_nova.wav",  # this is good
+                        default="data/conversations/002e4b0241534fc6f83d62452488bf1c7c05bc2ba69d840947a41d9a4727ae55_tts-1_nova.wav",  # this is good
                         ## default="data/conversations/fbc793678b9e6aee50fdbfe44cbb8a25334b96c8ab31219190087904b17ba267_tts-1_nova.wav",  # test set, short
-                        default="data/conversations/fd53b5ded29bb8bd5e7728a0227d91453233a52bb432cba23c66e8712d1ef39b_tts-1_nova.wav",  # test set, long
+                        # default="data/conversations/fd53b5ded29bb8bd5e7728a0227d91453233a52bb432cba23c66e8712d1ef39b_tts-1_nova.wav",  # test set, long
+                        # default="data/conversations/ff08fde6732fbe0ad5c7346410e8d28d4c6070b4585b2a61701daa4c7de46e72_tts-1_nova.wav",  # test set, long
                         help="Path to an audio file to use for conditioning (WAV, MP3, etc.)")
     parser.add_argument("--output_dir", type=str,
-                        default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters/gpt_generated_videos_gpt_block3",
+                        default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50/gpt_generated_videos_gpt_block1",
                         help="Directory to save generated videos")
     parser.add_argument("--cluster_data_dir", type=str,
-                        default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters",
+                        default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50",
                         help="Directory containing the image cluster data")
     parser.add_argument("--audio_model", type=str, default="hubert_zh",
                         choices=["hubert", "wav2vec2", "hubert_zh"],
@@ -852,36 +935,49 @@ def main():
                         help="Frames per second for the output video")
     parser.add_argument("--audio_feature_dim", type=int, default=768,
                         help="Expected audio feature dimension for the model")
+    parser.add_argument("--max_files", type=int, default=None,
+                        help="Maximum number of files to process")
     
     args = parser.parse_args()
     
+    data_dir = "data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50/tokenized_data_mel"
     if args.mode == "train":
+        # Create dataset builder
+        dataset_builder = AudioVisualDatasetBuilder(
+            # json_path="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50/video_sequences.json",
+            # audio_features_path="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50/audio_features.npy",
+            data_dir=data_dir,
+            max_sequence_length=16,
+            max_files=args.max_files,
+            start_token=args.start_token,
+        )
+
         # Define configuration
         config = ConditionalGPTTrainingPipeline.Config(
             log_dir=f"data/gpt_logs/conditional_generation/{args.model_arch}",
-            block_size=3,
-            vocab_size=768,  # Assuming this is the vocabulary size
+            block_size=7,
+            vocab_size=args.vocab_size,  # Assuming this is the vocabulary size
             batch_size=128,
             flatten_tokens=False,
+            # n_layer=6,
             n_layer=6,
             n_head=3,
-            n_embd=507,
+            n_embd=36,
             start_token=args.start_token,
             log_interval=100,
-            max_iters=200000,
-            audio_feature_dim=768,  # Match the hubert_zh feature dimension
-            # audio_proj_dim=36,  # Match n_embd for the transformer
-            audio_proj_dim=507,  # Match n_embd for the transformer
+            max_iters=10000,
+            # audio_feature_dim=768,  # Match the hubert_zh feature dimension
+            audio_feature_dim=80,
+            audio_proj_dim=8,
+            # audio_proj_dim=360,  # Match n_embd for the transformer
             model_arch=args.model_arch,  # Pass the model architecture choice
+            max_files=args.max_files,
+            data_dir=data_dir,
+            num_training_tokens=dataset_builder.num_training_frames(),
+            wandb_log=True,
         )
         
-        # Create dataset builder
-        dataset_builder = AudioVisualDatasetBuilder(
-            json_path="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters/video_sequences.json",
-            audio_features_path="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters/audio_features.npy",
-            max_sequence_length=12,
-            start_token=args.start_token,
-        )
+        
         
         # Create and run training pipeline
         pipeline = ConditionalGPTTrainingPipeline(config)

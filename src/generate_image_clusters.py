@@ -676,6 +676,12 @@ class ImageClusterGenerator:
         
         logger.info(f"Cluster data loaded successfully with {self.n_clusters} clusters")
     
+    def find_nearest_cluster_given_embedding(self, embedding: torch.Tensor) -> int:
+        """Find the nearest cluster for a given embedding"""
+        similarities = F.cosine_similarity(embedding, self.cluster_centers, dim=1)
+        nearest_cluster = torch.argmax(similarities).item()
+        return nearest_cluster
+
     def find_nearest_cluster(self, frame: np.ndarray) -> int:
         """Find the nearest cluster for a given frame"""
         # Convert BGR to RGB
@@ -729,6 +735,7 @@ def extract_frames_from_video(video_path: str, frame_interval: int = 1, verbose:
     # Open video file
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
+    # print(f"video fps: {fps}")
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     if verbose:

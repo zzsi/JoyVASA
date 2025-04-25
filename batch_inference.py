@@ -108,7 +108,8 @@ def batch_process_audio(
     if not audio_files:
         print(f"No .wav or .mp3 files found in {audio_dir} or its subdirectories")
         return []
-    
+    audio_files = sorted(audio_files)
+
     # Create base config with required arguments
     base_args = {
         "reference": reference_path,
@@ -168,8 +169,9 @@ if __name__ == "__main__":
         reference_path=reference_path,
         audio_dir=audio_dir,
         output_dir=output_dir,
-        animation_mode="lip"  # or "animal" or "human"
+        animation_mode="lip",  # or "animal" or "human"
         # animation_mode="human"
+        overwrite=False,
     )
     
     print(f"\nSuccessfully processed {len(successful_outputs)} files:")

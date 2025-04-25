@@ -83,7 +83,7 @@ class NanoGPTTrainingPipeline:
 
         # sparse context window
         sparse_context_window: bool = False
-        context_stride: int = 2
+        context_stride: int = 1
         context_stride_start: int = (
             32  # only do sparse context window before (block_size - context_stride_start)
         )
