@@ -142,7 +142,7 @@ def generate_videos(sample_members: List[AudioObject]) -> List[AudioObject]:
     return sample_members
 
 
-def collect_video_frames(sample_members: List[AudioObject], cluster_idx: int, audio_offset: int = 2) -> List[AudioObject]:
+def collect_video_frames(sample_members: List[AudioObject], cluster_idx: int, audio_offset: int = 2) -> List[np.ndarray]:
     all_video_frames = []
     
     for obj in sample_members:
@@ -184,7 +184,7 @@ def main():
     # audio_model = "mel"
     # audio_model = "hubert_zh"
     audio_offset = 2
-    n_samples = 30
+    n_samples = 15
     # output_dir = f"data/tmp_wav2lip_videos/{audio_model}_clustering_offset_{audio_offset}"
     output_dir = f"data/tmp_joyvasa_videos/{audio_model}_clustering_offset_{audio_offset}"
     os.makedirs(output_dir, exist_ok=True)
@@ -207,16 +207,26 @@ def main():
     sample_members_all_clusters = collect_sample_members(audio_objects, n_samples=n_samples, n_clusters=n_clusters)
     
     # Store centroid frames for each cluster
-    cluster_centroid_frames = {}
+    cluster_centroid_frames = []
     
     for cluster_id in tqdm(range(n_clusters), desc="Gathering video frames", total=n_clusters):
         sample_members = sample_members_all_clusters[cluster_id]
         sample_members = generate_videos(sample_members)
         video_frames = collect_video_frames(sample_members, cluster_id, audio_offset=audio_offset)
         
+        frame = None
         # Save the centroid frame (first frame) for this cluster
         if video_frames:
-            cluster_centroid_frames[cluster_id] = video_frames[0]
+            frame = video_frames[0]
+            if isinstance(frame, torch.Tensor):
+                frame = frame.cpu().numpy()
+            cluster_centroid_frames.append(frame)
+        else:
+            # empty frame
+            assert frame is not None, f"No frame found for cluster {cluster_id}, and we do not know the shape of the frame."
+            frame = np.zeros(frame.shape, dtype=np.uint8)
+            cluster_centroid_frames.append(frame)
+
         
         # save these video frames as a grid using torchvision
         frames = [torch.from_numpy(frame[...,::-1].copy()).permute(2,0,1) for frame in video_frames]  # Convert BGR to RGB
@@ -232,9 +242,15 @@ def main():
     print(f"Saved KMeans model to {kmeans_path}")
     
     # Save centroid frames
-    centroid_frames_path = os.path.join(cluster_data_dir, "centroid_frames.npz")
-    np.savez(centroid_frames_path, **{str(k): v for k, v in cluster_centroid_frames.items()})
+    ## Convert to numpy array
+    cluster_centroid_frames = np.array(cluster_centroid_frames)
+    centroid_frames_path = os.path.join(cluster_data_dir, "centroid_frames.npy")
+    np.save(centroid_frames_path, cluster_centroid_frames)
     print(f"Saved centroid frames to {centroid_frames_path}")
+
+    # load from the npy file and print out the shape
+    centroid_frames = np.load(centroid_frames_path)
+    print(f"Loaded centroid frames from {centroid_frames_path}, shape: {centroid_frames.shape}")
     
     # Save metadata
     metadata = {

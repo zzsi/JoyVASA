@@ -2,15 +2,11 @@
 Load the kmeans model, centroid frames, and metadata from the cluster_data_dir.
 Generate a video from an audio file.
 """
-import torch
-import cv2
-import clip
 import json
 import os
 import pickle
 import numpy as np
 from src.audio_utils import extract_audio_features
-from src.generate_image_clusters import extract_frames_from_video
 from src.utils.video import images2video, add_audio_to_video
 
 
@@ -18,10 +14,14 @@ class InferencePipeline:
     def __init__(self, cluster_data_dir: str):
         with open(os.path.join(cluster_data_dir, "metadata.json"), "r") as f:
             self.metadata = json.load(f)
-        with open(os.path.join(cluster_data_dir, "kmeans.pkl"), "rb") as f:
+        with open(os.path.join(cluster_data_dir, "kmeans_model.pkl"), "rb") as f:
             self.kmeans = pickle.load(f)
-        with open(os.path.join(cluster_data_dir, "centroid_frames.npz"), "rb") as f:
-            self.centroid_frames = np.load(f)
+        with open(os.path.join(cluster_data_dir, "centroid_frames.npy"), "rb") as f:
+            self.centroid_frames = np.load(f)  # this is a np.ndarray
+            assert len(self.centroid_frames.shape) == 4  # (n_clusters, h, w, 3)
+            assert self.centroid_frames.shape[3] == 3  # RGB
+        # Print out content of first frame
+        # import sys; sys.exit()
         self.audio_model = self.metadata["audio_model"]
         self.n_clusters = self.metadata["n_clusters"]
 
@@ -38,25 +38,26 @@ class InferencePipeline:
             device="cpu",
             stack_adjacent_frames=False,
             sample_rate=16000,
+            fps=25,
         )
         audio_features = audio_features.cpu().numpy()[0]
         assert len(audio_features.shape) == 2
 
         # Turn audio features into audio cluster ids
         audio_cluster_ids = self.kmeans.predict(audio_features)
+        print("audio_cluster_ids", audio_cluster_ids)
 
         # Turn cluster ids into centroid frames
-        centroid_frames = [self.centroid_frames[str(cluster_id)] for cluster_id in audio_cluster_ids]
+        centroid_frames = self.centroid_frames[audio_cluster_ids].copy()
 
         # Generate video
         silent_video_path = output_path.replace(".mp4", "_silent.mp4")
-        images2video(centroid_frames, wfp=silent_video_path)
+        # make sure the directory exists
+        os.makedirs(os.path.dirname(silent_video_path), exist_ok=True)
+        images2video(centroid_frames, wfp=silent_video_path, image_mode="bgr")
 
         # Add audio to video
-        add_audio_to_video(silent_video_path, audio_path, output_path)
-
-        # Remove silent video
-        os.remove(silent_video_path)
+        add_audio_to_video(silent_video_path, audio_path, output_path, remove_temp=True)
 
         return output_path
 
@@ -69,8 +70,9 @@ def main(args):
 if __name__ == "__main__":
     from argparse import ArgumentParser
     parser = ArgumentParser()
-    parser.add_argument("--audio_path", type=str, default="data/conversations/ffb948556a252fec4aa0601da677fda38bb2ab0be63cc9c726bebfd1b3500d62_tts-1_nova.wav")
-    parser.add_argument("--cluster_data_dir", type=str, default="data/tmp_joyvasa_videos/wav2lip_clustering_offset_2")
+    # parser.add_argument("--audio_path", type=str, default="data/conversations/ff394950e5e2b7d3a4b62f13a69e20f07c8fcea65216b02ca7a7502ce0c24efc_tts-1_nova.wav")
+    parser.add_argument("--audio_path", type=str, default="data/conversations/fff95ab1997fd754d0b22e2402efbc1c848f61b85563d93f8aa8c767357d0aac_tts-1_nova.wav")
+    parser.add_argument("--cluster_data_dir", type=str, default="data/tmp_joyvasa_videos/wav2lip_clustering_offset_2/cluster_data")
     parser.add_argument("--output_dir", type=str, default="data/tmp_joyvasa_videos/wav2lip_clustering_offset_2/generated/")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
