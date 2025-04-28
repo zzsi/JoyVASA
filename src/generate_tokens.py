@@ -57,6 +57,8 @@ def main(args):
         print("tokens:", visual_cluster_ids)
         print(f"number of visual cluster ids: {len(visual_cluster_ids)}, number of audio features: {audio_features.shape}")
         # save the visual cluster ids and audio features
+        if isinstance(audio_features, torch.Tensor):
+            audio_features = audio_features.cpu().numpy()
         np.savez(output_path, audio_features=audio_features, visual_cluster_ids=np.array(visual_cluster_ids))
 
 if __name__ == "__main__":
@@ -65,8 +67,8 @@ if __name__ == "__main__":
     parser.add_argument("--image_clusters_dir", type=str, default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50")
     parser.add_argument("--talking_head_video_pattern", type=str, default="data/conversations_joyvasa_videos/bithuman_coach2/*_lip.mp4")
     # parser.add_argument("--talking_head_video_pattern", type=str, default="data/conversations_joyvasa_videos/bithuman_coach2/bithuman_coach_cropped2_002e4b0241534fc6f83d62452488bf1c7c05bc2ba69d840947a41d9a4727ae55_tts-1_nova_lip.mp4")
-    parser.add_argument("--audio_model", type=str, default="hubert_zh")
-    parser.add_argument("--output_dir", type=str, default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50/tokenized_data")
+    parser.add_argument("--audio_model", type=str, default="wav2lip")
+    parser.add_argument("--output_dir", type=str, default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50/tokenized_data_wav2lip")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
     main(args)

@@ -89,12 +89,12 @@ def generate_audio_from_a_sentence(sentence, model: str = "tts-1", voice: str = 
 
 def main():
     ## Uncomment this to generate audio from natural conversation examples
-    model = "tts-1"
-    voice = "nova"
-    for sentence in sentences_from_examples():
-        print(f"Generating audio for: {sentence}")
-        audio_id = f"{hash_sentence(sentence)}_{model}_{voice}"
-        generate_audio_from_a_sentence(sentence, model, voice, f"data/conversations/{audio_id}.wav")
+    # model = "tts-1"
+    # voice = "nova"
+    # for sentence in sentences_from_examples():
+    #     print(f"Generating audio for: {sentence}")
+    #     audio_id = f"{hash_sentence(sentence)}_{model}_{voice}"
+    #     generate_audio_from_a_sentence(sentence, model, voice, f"data/conversations/{audio_id}.wav")
 
     ## Run batch inference to generate the lip-synced videos
     # Edit batch_inference.py, inference_config.py and argument_config.py. Run the following command to generate the lip-synced videos:
@@ -104,15 +104,6 @@ def main():
     # python -m src.generate_image_clusters --video_pattern "data/conversations_joyvasa_videos/bithuman_coach2/*_lip.mp4" --output_dir "data/conversations_joyvasa_videos/bithuman_coach2_image_clusters" --n_clusters 128 --max_frames 10000
 
     ## Run an audio encoder to extract the audio features and prepare training data: visual id sequence, paired with audio features
-
-    """
-    These are test set (not used in training)
-    2025-04-22 20:32:57,794 - INFO -   data/conversations_joyvasa_videos/bithuman_coach2/bithuman_coach_cropped2_fbc793678b9e6aee50fdbfe44cbb8a25334b96c8ab31219190087904b17ba267_tts-1_nova_lip.mp4
-2025-04-22 20:32:57,794 - INFO -   data/conversations_joyvasa_videos/bithuman_coach2/bithuman_coach_cropped2_fbe7824cc19fe3ebb103710ae88c4d6dd5d84d66dc2f7b4bf9ac9118fb37be4e_tts-1_nova_lip.mp4
-2025-04-22 20:32:57,794 - INFO -   data/conversations_joyvasa_videos/bithuman_coach2/bithuman_coach_cropped2_fd53b5ded29bb8bd5e7728a0227d91453233a52bb432cba23c66e8712d1ef39b_tts-1_nova_lip.mp4
-2025-04-22 20:32:57,794 - INFO -   data/conversations_joyvasa_videos/bithuman_coach2/bithuman_coach_cropped2_fdf4783903ac42e1d03c6e886ac93d8b3fd5a2ba49700cbace161bee29c996c1_tts-1_nova_lip.mp4
-2025-04-22 20:32:57,794 - INFO -   data/conversations_joyvasa_videos/bithuman_coach2/bithuman_coach_cropped2_ff08fde6732fbe0ad5c7346410e8d28d4c6070b4585b2a61701daa4c7de46e72_tts-1_nova_lip.mp4
-    """
 
     ## Run lip_gpt training pipeline to train a lip_gpt model
     # python -m src.lip_gpt --model_arch direct --mode train

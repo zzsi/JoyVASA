@@ -30,17 +30,26 @@ def load_audio_visual_token_data(data_dir: str, max_files: int = None):
     """
     npy_files = glob(os.path.join(data_dir, "*.npz"))
     assert len(npy_files) > 0, f"No npy files found in {data_dir}"
+    npy_files = sorted(npy_files)
     audio_visual_token_data = []
     if max_files is not None:
         npy_files = npy_files[:max_files]
+    files_with_errors = []
     for npy_file in tqdm(npy_files):
-        loaded = np.load(npy_file, allow_pickle=True)
-        audio_features = loaded["audio_features"]
-        visual_tokens = loaded["visual_cluster_ids"]
-        assert len(audio_features.shape) == 3
-        # truncate visual tokens to the same length as audio features
-        visual_tokens = visual_tokens[:audio_features.shape[1]]
-        audio_visual_token_data.append((audio_features, visual_tokens))
+        try:
+            loaded = np.load(npy_file, allow_pickle=True)
+            audio_features = loaded["audio_features"]
+            visual_tokens = loaded["visual_cluster_ids"]
+            assert len(audio_features.shape) == 3
+            # truncate visual tokens to the same length as audio features
+            visual_tokens = visual_tokens[:audio_features.shape[1]]
+            audio_visual_token_data.append((audio_features, visual_tokens))
+        except Exception as e:
+            files_with_errors.append(npy_file)
+            # print(f"Error loading {npy_file}: {e}")
+            continue
+    if len(files_with_errors) > 0:
+        print(f"There were {len(files_with_errors)} out of {len(npy_files)} files with errors: {files_with_errors}")
     return audio_visual_token_data
 
 
@@ -62,7 +71,7 @@ class AudioProjection(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.projection = nn.Linear(config.audio_feature_dim, config.audio_proj_dim)
-        print(f"Audio projection dim: {config.audio_proj_dim}")
+        # print(f"Audio projection dim: {config.audio_proj_dim}")
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
@@ -275,82 +284,108 @@ class AudioVisualDatasetBuilder:
             visual_sequences_list = self.video_cluster_id_sequences
             audio_features_list = self.audio_features
 
-        # Apply max_files limit
-        self.video_cluster_id_sequences = self.video_cluster_id_sequences[:self.max_files]
-        self.audio_features = self.audio_features[:self.max_files]
+        # Apply max_files limit if specified
+        if self.max_files is not None:
+            self.video_cluster_id_sequences = self.video_cluster_id_sequences[:self.max_files]
+            self.audio_features = self.audio_features[:self.max_files]
+        
+        # Add start token to the beginning of each sequence
+        self.video_cluster_id_sequences = [np.concatenate([[self.start_token], seq]) for seq in self.video_cluster_id_sequences]
+        
+        # Split data into training and validation sets (80/20 split)
+        n_samples = len(self.video_cluster_id_sequences)
+        n_train = int(n_samples * 0.8)
+        
+        # Create indices and shuffle them for random split
+        indices = np.arange(n_samples)
+        # np.random.seed(0)
+        # np.random.shuffle(indices)
+        train_indices = indices[:n_train]
+        val_indices = indices[n_train:]
+        
+        # Pre-allocate the split data
+        self.train_video_cluster_id_sequences = [self.video_cluster_id_sequences[i] for i in train_indices]
+        self.val_video_cluster_id_sequences = [self.video_cluster_id_sequences[i] for i in val_indices]
+        self.train_audio_sequences = [self.audio_features[i] for i in train_indices]
+        self.val_audio_sequences = [self.audio_features[i] for i in val_indices]
         
         # Verify that we have data to work with
         assert len(self.video_cluster_id_sequences) > 0, "No valid aligned audio-visual sequences found"
-        # Break down long sequences into smaller chunks
-        equalized_visual_sequences = []
-        equalized_audio_sequences = []
+        print(f"Training examples: {len(self.train_video_cluster_id_sequences)}, Validation examples: {len(self.val_video_cluster_id_sequences)}")
+        print(f"Tokens in training examples: {self.num_training_frames()}")
+        print(f"Tokens in validation examples: {self.num_validation_frames()}")
+        # # Break down long sequences into smaller chunks
+        # equalized_visual_sequences = []
+        # equalized_audio_sequences = []
         
-        print(f"There are {len(self.video_cluster_id_sequences)} sequences in the dataset")
-        for i, (visual_seq, audio_seq) in enumerate(zip(self.video_cluster_id_sequences, self.audio_features)):
-            # Verify that each audio sequence has the same length as its corresponding visual sequence
-            assert len(visual_seq) == len(audio_seq), \
-                f"Sequence {i}: Visual sequence length ({len(visual_seq)}) does not match audio sequence length ({len(audio_seq)})."
+        # print(f"There are {len(self.video_cluster_id_sequences)} sequences in the dataset")
+        # for i, (visual_seq, audio_seq) in enumerate(zip(self.video_cluster_id_sequences, self.audio_features)):
+        #     # Verify that each audio sequence has the same length as its corresponding visual sequence
+        #     assert len(visual_seq) == len(audio_seq), \
+        #         f"Sequence {i}: Visual sequence length ({len(visual_seq)}) does not match audio sequence length ({len(audio_seq)})."
             
-            if len(visual_seq) == self.max_sequence_length:
-                equalized_visual_sequences.append(visual_seq)
-                equalized_audio_sequences.append(audio_seq)
-            elif len(visual_seq) > self.max_sequence_length:
-                # Split long sequence into chunks of max_sequence_length
-                for j in range(0, len(visual_seq), self.max_sequence_length):
-                    visual_chunk = visual_seq[j:j + self.max_sequence_length]
-                    audio_chunk = audio_seq[j:j + self.max_sequence_length]
+        #     if len(visual_seq) == self.max_sequence_length:
+        #         equalized_visual_sequences.append(visual_seq)
+        #         equalized_audio_sequences.append(audio_seq)
+        #     elif len(visual_seq) > self.max_sequence_length:
+        #         # Split long sequence into chunks of max_sequence_length
+        #         for j in range(0, len(visual_seq), self.max_sequence_length):
+        #             visual_chunk = visual_seq[j:j + self.max_sequence_length]
+        #             audio_chunk = audio_seq[j:j + self.max_sequence_length]
                     
-                    if len(visual_chunk) == self.max_sequence_length:  # Only keep chunks that are exactly the max length
-                        equalized_visual_sequences.append(visual_chunk)
-                        equalized_audio_sequences.append(audio_chunk)
-            else:
-                print(f"Warning: Skipping sequence {i} - Visual sequence length ({len(visual_seq)}) is less than max sequence length ({self.max_sequence_length})")
+        #             if len(visual_chunk) == self.max_sequence_length:  # Only keep chunks that are exactly the max length
+        #                 equalized_visual_sequences.append(visual_chunk)
+        #                 equalized_audio_sequences.append(audio_chunk)
+        #     else:
+        #         print(f"Warning: Skipping sequence {i} - Visual sequence length ({len(visual_seq)}) is less than max sequence length ({self.max_sequence_length})")
             
-        print(f"There are {len(equalized_visual_sequences)} sequences in the dataset after equalization")
+        # print(f"There are {len(equalized_visual_sequences)} sequences in the dataset after equalization")
         
-        # Convert sequences to numpy arrays
-        equalized_visual_sequences = [np.array(seq) for seq in equalized_visual_sequences]
-        equalized_audio_sequences = [np.array(seq) for seq in equalized_audio_sequences]
+        # # Convert sequences to numpy arrays
+        # equalized_visual_sequences = [np.array(seq) for seq in equalized_visual_sequences]
+        # equalized_audio_sequences = [np.array(seq) for seq in equalized_audio_sequences]
 
-        # append start token to the beginning of each sequence
-        equalized_visual_sequences = [np.concatenate([[self.start_token], seq]) for seq in equalized_visual_sequences]
+        # # append start token to the beginning of each sequence
+        # equalized_visual_sequences = [np.concatenate([[self.start_token], seq]) for seq in equalized_visual_sequences]
         
-        # Split into train and validation sets
-        n_train = int(len(equalized_visual_sequences) * 0.8)
+        # # Split into train and validation sets
+        # n_train = int(len(equalized_visual_sequences) * 0.8)
         
-        # Split visual sequences
-        self.train_video_cluster_id_sequences = equalized_visual_sequences[:n_train]
-        self.val_video_cluster_id_sequences = equalized_visual_sequences[n_train:]
-        self.train_video_cluster_id_sequences = np.array(self.train_video_cluster_id_sequences)
-        self.val_video_cluster_id_sequences = np.array(self.val_video_cluster_id_sequences)
+        # # Split visual sequences
+        # self.train_video_cluster_id_sequences = equalized_visual_sequences[:n_train]
+        # self.val_video_cluster_id_sequences = equalized_visual_sequences[n_train:]
+        # self.train_video_cluster_id_sequences = np.array(self.train_video_cluster_id_sequences)
+        # self.val_video_cluster_id_sequences = np.array(self.val_video_cluster_id_sequences)
         
-        # Split audio sequences
-        self.train_audio_sequences = equalized_audio_sequences[:n_train]
-        self.val_audio_sequences = equalized_audio_sequences[n_train:]
-        self.train_audio_sequences = np.array(self.train_audio_sequences)
-        self.val_audio_sequences = np.array(self.val_audio_sequences)
+        # # Split audio sequences
+        # self.train_audio_sequences = equalized_audio_sequences[:n_train]
+        # self.val_audio_sequences = equalized_audio_sequences[n_train:]
+        # self.train_audio_sequences = np.array(self.train_audio_sequences)
+        # self.val_audio_sequences = np.array(self.val_audio_sequences)
         
-        # Verify shapes
-        assert len(self.train_video_cluster_id_sequences.shape) == 2, \
-            f"train_video_cluster_id_sequences should be a 2D array, got {self.train_video_cluster_id_sequences.shape}"
-        assert len(self.train_audio_sequences.shape) == 3, \
-            f"train_audio_sequences should be a 3D array, got {self.train_audio_sequences.shape}"
-        assert self.train_video_cluster_id_sequences.shape[0] == self.train_audio_sequences.shape[0], \
-            f"Number of training visual sequences ({self.train_video_cluster_id_sequences.shape[0]}) does not match number of training audio sequences ({self.train_audio_sequences.shape[0]})"
-        assert self.train_video_cluster_id_sequences.shape[1] == self.train_audio_sequences.shape[1] + 1, \
-            f"Length of training visual sequences ({self.train_video_cluster_id_sequences.shape[1]}) does not match length of training audio sequences ({self.train_audio_sequences.shape[1]})"
+        # # Verify shapes
+        # assert len(self.train_video_cluster_id_sequences.shape) == 2, \
+        #     f"train_video_cluster_id_sequences should be a 2D array, got {self.train_video_cluster_id_sequences.shape}"
+        # assert len(self.train_audio_sequences.shape) == 3, \
+        #     f"train_audio_sequences should be a 3D array, got {self.train_audio_sequences.shape}"
+        # assert self.train_video_cluster_id_sequences.shape[0] == self.train_audio_sequences.shape[0], \
+        #     f"Number of training visual sequences ({self.train_video_cluster_id_sequences.shape[0]}) does not match number of training audio sequences ({self.train_audio_sequences.shape[0]})"
+        # assert self.train_video_cluster_id_sequences.shape[1] == self.train_audio_sequences.shape[1] + 1, \
+        #     f"Length of training visual sequences ({self.train_video_cluster_id_sequences.shape[1]}) does not match length of training audio sequences ({self.train_audio_sequences.shape[1]})"
     
-        # Print out the shapes of the training and validation datasets
-        print(f"Training dataset shapes: visual {self.train_video_cluster_id_sequences.shape}, audio {self.train_audio_sequences.shape}")
-        print(f"Validation dataset shapes: visual {self.val_video_cluster_id_sequences.shape}, audio {self.val_audio_sequences.shape}")
+        # # Print out the shapes of the training and validation datasets
+        # print(f"Training dataset shapes: visual {self.train_video_cluster_id_sequences.shape}, audio {self.train_audio_sequences.shape}")
+        # print(f"Validation dataset shapes: visual {self.val_video_cluster_id_sequences.shape}, audio {self.val_audio_sequences.shape}")
 
     def num_training_frames(self):
         """Returns the number of training frames."""
-        return self.train_audio_sequences.shape[1] * self.train_audio_sequences.shape[0]
-
+        # return self.train_audio_sequences.shape[1] * self.train_audio_sequences.shape[0]
+        return sum(len(seq) for seq in self.train_video_cluster_id_sequences)
+    
     def num_validation_frames(self):
         """Returns the number of validation frames."""
-        return self.val_audio_sequences.shape[1] * self.val_audio_sequences.shape[0]
+        # return self.val_audio_sequences.shape[1] * self.val_audio_sequences.shape[0]
+        return sum(len(seq) for seq in self.val_video_cluster_id_sequences)
 
     def training_dataset(self):
         """Returns a tuple of (visual_sequences, audio_sequences) for training."""
@@ -439,8 +474,8 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
             
         self.model = model
         return model
-        
-    def get_batch(self, split: str):
+
+    def get_batch_with_equal_length_sequences(self, split: str):
         """Get a batch of data for training or validation."""
         train_visual, train_audio = self.train_data
         val_visual, val_audio = self.val_data
@@ -496,28 +531,72 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
             y = y.to(device)
 
         assert x_visual.shape == (batch_size, block_size), f"x_visual.shape: {x_visual.shape}"
-        assert x_audio.shape == (batch_size, block_size, self.config.audio_feature_dim), f"x_audio.shape: {x_audio.shape}"
+        assert x_audio.shape == (batch_size, block_size, self.config.audio_feature_dim), f"x_audio.shape: {x_audio.shape}, expected: {batch_size, block_size, self.config.audio_feature_dim}"
         assert y.shape == (batch_size, block_size), f"y.shape: {y.shape}"
 
         return x_visual, x_audio, y
+
+    def get_batch(self, split: str):
+        """Get a batch of data for training or validation.
+
+        It respects the fact that each example may have a different length,
+        and that the visual data may have a different shape than the audio data.
+        """
+        train_visual, train_audio = self.train_data
+        val_visual, val_audio = self.val_data
         
+        visual_data = train_visual if split == "train" else val_visual
+        audio_data = train_audio if split == "train" else val_audio
+        
+        batch_size = self.config.batch_size
+        block_size = self.config.block_size
+        device = self.config.device
+
+        irow = torch.randint(len(visual_data), (batch_size,))
+        x_visual = []
+        x_audio = []
+        y = []
+        for i in irow:
+            seq_len = min(len(visual_data[i]), len(audio_data[i]))
+            if seq_len <= block_size:
+                continue
+            ix = torch.randint(seq_len - block_size, (1,))
+            x_visual.append(torch.tensor(visual_data[i][ix:ix+block_size], dtype=torch.long))
+            x_audio.append(torch.tensor(audio_data[i][ix:ix+block_size], dtype=torch.float32))
+            y.append(torch.tensor(visual_data[i][ix+1:ix+1+block_size], dtype=torch.long))
+
+        x_visual = torch.stack(x_visual)
+        x_audio = torch.stack(x_audio)
+        y = torch.stack(y)
+        if self.device_type == "cuda":
+            x_visual = x_visual.pin_memory().to(device, non_blocking=True)
+            x_audio = x_audio.pin_memory().to(device, non_blocking=True)
+            y = y.pin_memory().to(device, non_blocking=True)
+        else:
+            x_visual = x_visual.to(device)
+            x_audio = x_audio.to(device)
+            y = y.to(device)
+        actual_batch_size = x_visual.shape[0] if x_visual.shape[0] > 0 else batch_size
+        assert x_visual.shape == (actual_batch_size, block_size), f"x_visual.shape: {x_visual.shape}"
+        assert x_audio.shape == (actual_batch_size, block_size, self.config.audio_feature_dim), f"x_audio.shape: {x_audio.shape}, expected: {actual_batch_size, block_size, self.config.audio_feature_dim}"
+        assert y.shape == (actual_batch_size, block_size), f"y.shape: {y.shape}"
+
+        return x_visual, x_audio, y
+            
     def create_dataloaders(self, dataset_builder):
         """Create training and validation dataloaders."""
         train_visual, train_audio = dataset_builder.training_dataset()
         val_visual, val_audio = dataset_builder.validation_dataset()
         
         self.train_data = (
-            torch.tensor(train_visual, dtype=torch.long),
-            torch.tensor(train_audio, dtype=torch.float32)
+            train_visual,
+            train_audio
         )
         self.val_data = (
-            torch.tensor(val_visual, dtype=torch.long),
-            torch.tensor(val_audio, dtype=torch.float32)
+            val_visual,
+            val_audio
         )
         
-        print(f"Train data shapes: visual {train_visual.shape}, audio {train_audio.shape}")
-        print(f"Val data shapes: visual {val_visual.shape}, audio {val_audio.shape}")
-    
     @torch.no_grad()
     def estimate_loss(self):
         model = self.model
@@ -559,8 +638,8 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
 
         # Get first example from training data for generation
         train_visual, train_audio = self.train_data
-        example_visual = train_visual[0:1, :1]  # First example, first token
-        example_audio = train_audio[0:1, :]  # First example, all audio frames
+        example_visual = torch.tensor(train_visual[0][:1], dtype=torch.long).unsqueeze(0)  # First example, first token
+        example_audio = torch.tensor(train_audio[0][:, :], dtype=torch.float32).unsqueeze(0)  # First example, all audio frames
         example_audio = example_audio.to(self.config.device)
         example_visual = example_visual.to(self.config.device)
 
@@ -599,8 +678,8 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
                             "mfu": running_mfu * 100,  # convert to percentage
                         }
                     )
-                # if losses["val"] < best_val_loss or always_save_checkpoint:
-                if True:
+                if losses["val"] < best_val_loss or always_save_checkpoint:
+                # if True:
                     best_val_loss = losses["val"]
                     if iter_num > 0:
                         model_args = self.model_args
@@ -631,10 +710,10 @@ class ConditionalGPTTrainingPipeline(NanoGPTTrainingPipeline):
                                 "input_visual": example_visual.cpu().tolist(),
                                 "generated": generated.cpu().tolist(),
                                 "iter_num": iter_num,
-                                "ground_truth": train_visual[0:1, :].cpu().tolist()
+                                "ground_truth": train_visual[0][:].tolist()
                             }
                             # print and compare ground truth and generated sequence
-                            print(f"Ground truth: {train_visual[0, :].cpu().tolist()}")
+                            print(f"Ground truth: {train_visual[0][:].tolist()}")
                             print(f"Generated:    {generated[0].cpu().tolist()}")
                             with open(example_path, 'w') as f:
                                 json.dump(sequence_data, f, indent=2)
@@ -896,7 +975,7 @@ def main():
                         help="Model architecture to use: gpt (full transformer) or direct (simple audio-to-visual)")
     parser.add_argument("--ckpt_path", type=str, 
                         # default="data/gpt_logs/conditional_generation/batch128_block3/ckpt.pt",
-                        default="data/gpt_logs/conditional_generation/gpt/batch128_block1/ckpt.pt",
+                        default="data/gpt_logs/conditional_generation/gpt/batch128_block50/ckpt.pt",
                         help="Path to the checkpoint file for inference")
     parser.add_argument("--device", type=str, default="cuda", 
                         help="Device to run the model on: cuda or cpu")
@@ -915,32 +994,33 @@ def main():
     parser.add_argument("--audio_file", type=str,
                         # default="data/conversations/0b69c3d770680d2966d07a2c85ca35a8529e03b943c4e0350f0e6e0a00fc3ad3_tts-1_nova.wav",
                         # default="data/conversations/0d25f2d1de2e0805f932a817fd254c3113443f65409612dfbd64d23c93fd6d68_tts-1_nova.wav",
-                        default="data/conversations/002e4b0241534fc6f83d62452488bf1c7c05bc2ba69d840947a41d9a4727ae55_tts-1_nova.wav",  # this is good
-                        ## default="data/conversations/fbc793678b9e6aee50fdbfe44cbb8a25334b96c8ab31219190087904b17ba267_tts-1_nova.wav",  # test set, short
-                        # default="data/conversations/fd53b5ded29bb8bd5e7728a0227d91453233a52bb432cba23c66e8712d1ef39b_tts-1_nova.wav",  # test set, long
-                        # default="data/conversations/ff08fde6732fbe0ad5c7346410e8d28d4c6070b4585b2a61701daa4c7de46e72_tts-1_nova.wav",  # test set, long
+                        # default="data/conversations/002e4b0241534fc6f83d62452488bf1c7c05bc2ba69d840947a41d9a4727ae55_tts-1_nova.wav",  # this is good
+                        # default="data/conversations/fff95ab1997fd754d0b22e2402efbc1c848f61b85563d93f8aa8c767357d0aac_tts-1_nova.wav",  # test set
+                        ## default="data/conversations/fbc793678b9e6aee50fdbfe44cbb8a25334b96c8ab31219190087904b17ba267_tts-1_nova.wav",  # short
+                        default="data/conversations/fd53b5ded29bb8bd5e7728a0227d91453233a52bb432cba23c66e8712d1ef39b_tts-1_nova.wav",  # long
+                        # default="data/conversations/ff08fde6732fbe0ad5c7346410e8d28d4c6070b4585b2a61701daa4c7de46e72_tts-1_nova.wav",  # long
                         help="Path to an audio file to use for conditioning (WAV, MP3, etc.)")
     parser.add_argument("--output_dir", type=str,
-                        default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50/gpt_generated_videos_gpt_block1",
+                        default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50/gpt_generated_videos_gpt_block50",
                         help="Directory to save generated videos")
     parser.add_argument("--cluster_data_dir", type=str,
                         default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50",
                         help="Directory containing the image cluster data")
-    parser.add_argument("--audio_model", type=str, default="hubert_zh",
-                        choices=["hubert", "wav2vec2", "hubert_zh"],
+    parser.add_argument("--audio_model", type=str, default="wav2lip",
+                        choices=["hubert", "wav2vec2", "hubert_zh", "wav2lip"],
                         help="Audio encoder model to use for feature extraction")
     parser.add_argument("--sample_rate", type=int, default=16000,
                         help="Sample rate for audio processing")
     parser.add_argument("--fps", type=int, default=25,
                         help="Frames per second for the output video")
-    parser.add_argument("--audio_feature_dim", type=int, default=768,
+    parser.add_argument("--audio_feature_dim", type=int, default=512,
                         help="Expected audio feature dimension for the model")
     parser.add_argument("--max_files", type=int, default=None,
                         help="Maximum number of files to process")
     
     args = parser.parse_args()
     
-    data_dir = "data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50/tokenized_data_mel"
+    data_dir = "data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50/tokenized_data_wav2lip"
     if args.mode == "train":
         # Create dataset builder
         dataset_builder = AudioVisualDatasetBuilder(
@@ -955,19 +1035,18 @@ def main():
         # Define configuration
         config = ConditionalGPTTrainingPipeline.Config(
             log_dir=f"data/gpt_logs/conditional_generation/{args.model_arch}",
-            block_size=7,
+            block_size=30,
             vocab_size=args.vocab_size,  # Assuming this is the vocabulary size
             batch_size=128,
             flatten_tokens=False,
-            # n_layer=6,
-            n_layer=6,
-            n_head=3,
+            n_layer=3,
+            n_head=1,
             n_embd=36,
             start_token=args.start_token,
             log_interval=100,
             max_iters=10000,
             # audio_feature_dim=768,  # Match the hubert_zh feature dimension
-            audio_feature_dim=80,
+            audio_feature_dim=512,
             audio_proj_dim=8,
             # audio_proj_dim=360,  # Match n_embd for the transformer
             model_arch=args.model_arch,  # Pass the model architecture choice
@@ -976,8 +1055,6 @@ def main():
             num_training_tokens=dataset_builder.num_training_frames(),
             wandb_log=True,
         )
-        
-        
         
         # Create and run training pipeline
         pipeline = ConditionalGPTTrainingPipeline(config)
