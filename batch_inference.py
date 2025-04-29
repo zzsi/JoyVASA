@@ -94,7 +94,7 @@ def find_audio_files(directory: str) -> List[str]:
 
 def batch_process_audio(
     reference_path: str,
-    audio_dir: str,
+    audio_files: List[str],
     output_dir: str,
     animation_mode: str = "human",
     **kwargs
@@ -102,13 +102,6 @@ def batch_process_audio(
     """Process all audio files in a directory and its subdirectories and return list of successful outputs."""
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Get list of audio files recursively
-    audio_files = find_audio_files(audio_dir)
-    if not audio_files:
-        print(f"No .wav or .mp3 files found in {audio_dir} or its subdirectories")
-        return []
-    audio_files = sorted(audio_files)
 
     # Create base config with required arguments
     base_args = {
@@ -159,17 +152,56 @@ def batch_process_audio(
     return successful_outputs
 
 
+def get_audio_files_from_dir(audio_dir: str) -> List[str]:
+    audio_files = []
+    for root, _, files in os.walk(audio_dir):
+        for file in files:
+            if file.lower().endswith(('.wav', '.mp3')):
+                audio_files.append(osp.join(root, file))
+    audio_files = sorted(audio_files)
+    return audio_files
+
+def get_gpt_generated_audio_files(audio_dir: str = "data/conversations") -> List[str]:
+    return get_audio_files_from_dir(audio_dir)
+
+def get_celeb_extracted_audio_files(audio_dir: str = "data/celeb_extracted_audios/videos") -> List[str]:
+    return get_audio_files_from_dir(audio_dir)
+
+def get_librispeech_audio_files(audio_dir: str = "data/LibriTTS/LibriTTS/train-clean-100", gender: str = "F") -> List[str]:
+    """
+    Args:
+        audio_dir: directory containing the audio files
+        gender: "F", "M", None
+    """
+    import pandas as pd
+
+    assert gender in ["F", "M", None], f"Invalid gender: {gender}. Must be one of: 'F', 'M', or None"
+    speakers_df = pd.read_csv("data/LibriTTS/LibriTTS/speakers.tsv", sep="\t", header=0, names=["READER", "GENDER", "SUBSET", "NAME"])
+    # print(speakers_df.head()); import sys; sys.exit()
+    speakers_df = speakers_df[(speakers_df["GENDER"] == gender) & (speakers_df["SUBSET"] == "train-clean-100")]
+    speaker_ids = speakers_df["READER"].tolist()
+    # The file name is like: 19_198_000000_000002.wav, where 19 is the speaker id
+    audio_files = []
+    for speaker_id in speaker_ids:
+        audio_files.extend(get_audio_files_from_dir(osp.join(audio_dir, str(speaker_id))))
+    audio_files = sorted(audio_files)
+    assert len(audio_files) > 0, f"No audio files found"
+    return audio_files
+
 if __name__ == "__main__":
     # Example usage
     reference_path = "assets/examples/imgs/bithuman_coach_cropped2.png"
     # audio_dir = "data/audio_files_for_batch_inference"
-    # audio_dir = "data/conversations"
-    audio_dir = "data/celeb_extracted_audios/videos"
+    
+    audio_files = get_librispeech_audio_files()
+    # print(f"Found {len(audio_files)} audio files"); import sys; sys.exit()
+
     # output_dir = "data/batch_generated_videos/bithuman_coach"
-    output_dir = "data/celab_joyvasa_videos/bithuman_coach2"
+    # output_dir = "data/celab_joyvasa_videos/bithuman_coach2"
+    output_dir = "data/librispeech_joyvasa_videos"
     successful_outputs = batch_process_audio(
         reference_path=reference_path,
-        audio_dir=audio_dir,
+        audio_files=audio_files,
         output_dir=output_dir,
         animation_mode="lip",  # or "animal" or "human"
         # animation_mode="human"

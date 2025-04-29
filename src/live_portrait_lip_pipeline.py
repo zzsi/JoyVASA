@@ -190,12 +190,13 @@ class LivePortraitLipPipeline(object):
         
         add_audio_to_video(temp_video, args.audio, final_video, remove_temp=True)
 
-        # Save lip features
-        with open(features_path, 'wb') as f:
-            pickle.dump({
-                'fps': inf_cfg.output_fps,
-                'n_frames': n_frames,
-                'features': lip_features
-            }, f)
+        # # Save lip features
+        # with open(features_path, 'wb') as f:
+        #     pickle.dump({
+        #         'fps': inf_cfg.output_fps,
+        #         'n_frames': n_frames,
+        #         'features': lip_features
+        #     }, f)
 
+        features_path = None
         return final_video, features_path

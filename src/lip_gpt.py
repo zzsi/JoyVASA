@@ -996,8 +996,9 @@ def main():
                         # default="data/conversations/0d25f2d1de2e0805f932a817fd254c3113443f65409612dfbd64d23c93fd6d68_tts-1_nova.wav",
                         # default="data/conversations/002e4b0241534fc6f83d62452488bf1c7c05bc2ba69d840947a41d9a4727ae55_tts-1_nova.wav",  # this is good
                         # default="data/conversations/fff95ab1997fd754d0b22e2402efbc1c848f61b85563d93f8aa8c767357d0aac_tts-1_nova.wav",  # test set
+                        default="data/conversations/ff394950e5e2b7d3a4b62f13a69e20f07c8fcea65216b02ca7a7502ce0c24efc_tts-1_nova.wav",  # test set
                         ## default="data/conversations/fbc793678b9e6aee50fdbfe44cbb8a25334b96c8ab31219190087904b17ba267_tts-1_nova.wav",  # short
-                        default="data/conversations/fd53b5ded29bb8bd5e7728a0227d91453233a52bb432cba23c66e8712d1ef39b_tts-1_nova.wav",  # long
+                        # default="data/conversations/fd53b5ded29bb8bd5e7728a0227d91453233a52bb432cba23c66e8712d1ef39b_tts-1_nova.wav",  # long
                         # default="data/conversations/ff08fde6732fbe0ad5c7346410e8d28d4c6070b4585b2a61701daa4c7de46e72_tts-1_nova.wav",  # long
                         help="Path to an audio file to use for conditioning (WAV, MP3, etc.)")
     parser.add_argument("--output_dir", type=str,
