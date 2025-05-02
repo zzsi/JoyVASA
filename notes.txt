@@ -1,0 +1,8 @@
+## TODO
+- New loss: use MSE(predicted_visual_token_vit_embedding, gt_visual_token_vit_embedding)
+- Interleave audio token ids and visual token ids
+
+## Data
+
+Librispeech
+https://openslr.org/60/

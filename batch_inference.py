@@ -196,9 +196,8 @@ if __name__ == "__main__":
     audio_files = get_librispeech_audio_files()
     # print(f"Found {len(audio_files)} audio files"); import sys; sys.exit()
 
-    # output_dir = "data/batch_generated_videos/bithuman_coach"
     # output_dir = "data/celab_joyvasa_videos/bithuman_coach2"
-    output_dir = "data/librispeech_joyvasa_videos"
+    output_dir = "data/librispeech_joyvasa_videos/bithuman_coach2"
     successful_outputs = batch_process_audio(
         reference_path=reference_path,
         audio_files=audio_files,

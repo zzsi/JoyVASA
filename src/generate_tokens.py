@@ -61,14 +61,19 @@ def main(args):
             audio_features = audio_features.cpu().numpy()
         np.savez(output_path, audio_features=audio_features, visual_cluster_ids=np.array(visual_cluster_ids))
 
+
 if __name__ == "__main__":
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument("--image_clusters_dir", type=str, default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50")
-    parser.add_argument("--talking_head_video_pattern", type=str, default="data/conversations_joyvasa_videos/bithuman_coach2/*_lip.mp4")
-    # parser.add_argument("--talking_head_video_pattern", type=str, default="data/conversations_joyvasa_videos/bithuman_coach2/bithuman_coach_cropped2_002e4b0241534fc6f83d62452488bf1c7c05bc2ba69d840947a41d9a4727ae55_tts-1_nova_lip.mp4")
+    # parser.add_argument("--talking_head_video_pattern", type=str, default="data/conversations_joyvasa_videos/bithuman_coach2/*_lip.mp4")
+    # parser.add_argument("--talking_head_video_pattern", type=str, default="data/celeb_joyvasa_videos/bithuman_coach2/*_lip.mp4")
+    parser.add_argument("--talking_head_video_pattern", type=str, default="data/librispeech_joyvasa_videos/bithuman_coach2/*_lip.mp4")
     parser.add_argument("--audio_model", type=str, default="wav2lip")
+    
+    # Dumping all video tokens into this directory for now...
     parser.add_argument("--output_dir", type=str, default="data/conversations_joyvasa_videos/bithuman_coach2_image_clusters_50/tokenized_data_wav2lip")
+
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
     main(args)

@@ -130,7 +130,7 @@ def detokenize(token_ids: list[int], cluster_data_dir: str, output_path: str = N
     logger = logging.getLogger(__name__)
     
     # Initialize the cluster generator and load the data
-    cluster_generator = ImageClusterGenerator(device='cpu')
+    cluster_generator = ImageClusterGenerator(device='cpu', audio_feature_type=None)
     cluster_generator.load_cluster_data(cluster_data_dir)
     
     # Get the first frame from any cluster to determine dimensions
